@@ -7,35 +7,13 @@ and run in milliseconds.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from typing import Any
-
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
 
-from app.deps import get_session
-
-
-class _StubSession:
-    """Minimal stand-in for ``AsyncSession``: records or refuses ``execute``."""
-
-    def __init__(self, error: Exception | None = None) -> None:
-        self.error = error
-        self.statements: list[Any] = []
-
-    async def execute(self, statement: Any) -> Any:
-        self.statements.append(statement)
-        if self.error is not None:
-            raise self.error
-        return None
-
-
-def _override_session(app: FastAPI, session: _StubSession) -> None:
-    async def _get_session() -> AsyncIterator[_StubSession]:
-        yield session
-
-    app.dependency_overrides[get_session] = _get_session
+# ANV-6 promoted the stub session and the override helper into `tests/helpers.py`, so every
+# API test that has to keep a route off Postgres uses the same two names.
+from tests.helpers import StubSession, override_session
 
 
 class TestLiveness:
@@ -48,8 +26,8 @@ class TestLiveness:
         self, app: FastAPI, client: AsyncClient
     ) -> None:
         """A liveness probe that depends on Postgres gets containers restart-looped."""
-        exploding = _StubSession(error=AssertionError("liveness must not query the database"))
-        _override_session(app, exploding)
+        exploding = StubSession(error=AssertionError("liveness must not query the database"))
+        override_session(app, exploding)
 
         response = await client.get("/health")
 
@@ -61,8 +39,8 @@ class TestReadiness:
     async def test_ready_runs_select_1_and_returns_ok(
         self, app: FastAPI, client: AsyncClient
     ) -> None:
-        session = _StubSession()
-        _override_session(app, session)
+        session = StubSession()
+        override_session(app, session)
 
         response = await client.get("/health/ready")
 
@@ -79,7 +57,7 @@ class TestReadiness:
     async def test_ready_returns_503_when_the_database_is_unreachable(
         self, app: FastAPI, client: AsyncClient, failure: Exception
     ) -> None:
-        _override_session(app, _StubSession(error=failure))
+        override_session(app, StubSession(error=failure))
 
         response = await client.get("/health/ready")
 
@@ -91,7 +69,7 @@ class TestReadiness:
     async def test_the_503_body_leaks_no_driver_detail(
         self, app: FastAPI, client: AsyncClient
     ) -> None:
-        _override_session(app, _StubSession(error=OSError("password authentication failed")))
+        override_session(app, StubSession(error=OSError("password authentication failed")))
 
         response = await client.get("/health/ready")
 

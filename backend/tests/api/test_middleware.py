@@ -25,9 +25,7 @@ from app.domain.errors import (
 )
 from app.middleware.request_id import REQUEST_ID_HEADER
 from tests.conftest import ALLOWED_ORIGIN
-
-#: Every key the envelope promises, always present.
-ERROR_BODY_KEYS = {"code", "message", "details", "request_id"}
+from tests.helpers import ERROR_BODY_KEYS
 
 SECRET = "postgresql://anvex:hunter2@db:5432/anvex"
 

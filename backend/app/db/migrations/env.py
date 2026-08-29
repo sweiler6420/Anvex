@@ -41,8 +41,15 @@ if config.config_file_name is not None:
 settings = get_settings()
 SCHEMA: str = settings.postgres_schema
 
+# A caller driving alembic through its Python API may inject an explicit URL by setting
+# `config.attributes["sqlalchemy.url"]`. Nothing in the application does — it exists so the
+# pytest harness can migrate the `db-test` database (and the throwaway databases the
+# migration test creates) without mutating the process environment and clearing the
+# `get_settings` cache, which would repoint the *application* engine for the whole session.
+url: str = config.attributes.get("sqlalchemy.url") or settings.postgres_dsn
+
 # `%` is the configparser interpolation character, and a Postgres password may contain one.
-config.set_main_option("sqlalchemy.url", settings.postgres_dsn.replace("%", "%%"))
+config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 

@@ -269,7 +269,53 @@ frontend/src/
 - Shared fixtures in `tests/conftest.py`; model factories in `tests/factories/`.
 - **The default suite must run with Docker stopped.** A test that needs a container skips itself,
   never fails. Tests needing the *whole* compose stack are opt-in behind `ANVEX_COMPOSE_TEST=1`.
-- Run: `uv run pytest` (or `scripts/test.ps1`).
+- Run: `uv run python -m pytest` (`uv run pytest` is blocked by an Application Control policy on
+  the current dev machine). Full guide: [`backend/docs/testing.md`](backend/docs/testing.md).
+
+#### The harness — fixture names and rules
+
+**Extend `tests/conftest.py`. Never start a parallel conftest or a second set of database
+fixtures.** Supporting modules beside it: `tests/database.py` (how the harness reaches and
+migrates `db-test`), `tests/helpers.py` (shared assertions and stubs), `tests/factories/`.
+
+| Fixture | Scope | Gives you |
+| --- | --- | --- |
+| `settings` | function | `Settings` with CORS origins and log level pinned. Override it in a module to pin one more field; do not construct a second `Settings`. |
+| `app` | function | `create_app(settings)`. **Fresh per test**, so `dependency_overrides` cannot leak. |
+| `client` | function | `AsyncClient` over `ASGITransport(raise_app_exceptions=False)` — the flag is load-bearing; without it a 500 re-raises into the test instead of returning the body a real client sees. |
+| `mock_http` | function | a `respx` router intercepting every outbound `httpx` call |
+| `database_available` | session | skips unless `db-test` answers |
+| `db_engine` | session | `AsyncEngine` on the migrated `anvex_test` (`NullPool`) |
+| `db_connection` | function | a connection holding an open, never-committed transaction |
+| `db_session` | function | **the usual one** — an `AsyncSession` whose writes are rolled back |
+| `db_app` / `db_client` | function | `app` / `client` with `deps.get_session` resolved to `db_session` |
+| `throwaway_database_url` | function | a brand-new empty database, dropped afterwards |
+
+- **What each tier may touch.** `tests/unit/` — nothing (no fixtures, no I/O). `tests/api/` —
+  `client` plus `app.dependency_overrides`; never a database. `tests/integration/` — `db_session`
+  for repos and services, `mock_http` for clients.
+- **Isolation survives `commit()`.** `db_connection` never commits its transaction and `db_session`
+  joins it with `join_transaction_mode="create_savepoint"`, so a service's `session.commit()`
+  releases a savepoint and behaves normally while the outer transaction is still rolled back at
+  teardown. Do not add per-test cleanup or truncation — there is nothing to clean up.
+- **Skipping is fixture-driven, not directory-driven.** Requesting any `db_*` fixture auto-applies
+  the `db` marker, and the test skips with a reason when Postgres is unreachable; `-m "not db"`
+  deselects the tier. So do not ask for `db_session` "just in case", and a `respx`-only test in
+  `tests/integration/` keeps running with Docker stopped.
+- **The harness migrates, it does not `create_all`.** `db_engine` runs `alembic upgrade head` once
+  per session against `db-test`, which starts empty every time (tmpfs, no volume). Alembic's
+  `env.py` honours `config.attributes["sqlalchemy.url"]` so the harness can point it at a specific
+  database without mutating the environment; nothing in `app/` uses that hook.
+- **The test DSN lives in `tests/database.py`, not `app/settings.py`** — §4 says nothing in `app/`
+  knows `db-test` exists. It is a test-only `BaseSettings` reading `POSTGRES_TEST_HOST`
+  (default `localhost`), `POSTGRES_TEST_PORT` (falls back to `POSTGRES_TEST_HOST_PORT`) and
+  `POSTGRES_TEST_DB` from the same repo-root `.env`.
+- **Assert error bodies with `assert_error_envelope`** from `tests/helpers.py`, and keep a
+  session-taking route off Postgres with `override_session(app, StubSession(...))` from the same
+  module. `ERROR_BODY_KEYS` is defined there once.
+- **Factories:** one `Factory` subclass per model in `tests/factories/`, `@register`ed. Unique
+  columns come from `self.sequence()`, never from faker (seeding resets per test, so faker repeats
+  within one test). A factory flushes; it never commits.
 
 ### Frontend — vitest
 - `vitest` + `@testing-library/react` + `msw` for network mocking.
