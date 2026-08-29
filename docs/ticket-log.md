@@ -1542,3 +1542,57 @@ been caught incidentally, and recorded the same honest `request_cancelled` gap A
 
 **21 mutations, every one caught.** Notably M17 (removing `htmlFor`) fails **16** tests — the field
 loses its accessible name and nothing can find it.
+
+### ANV-32 — Done
+Commit `fdf6475`, 51 new tests (342 → **393**). **Verified independently:** 393 pass, lint clean,
+and I confirmed all four of its findings against the old repo directly.
+
+**The most serious accessibility bug found in the whole port.** `Pricing` conveyed
+included-versus-excluded **only** by a green tick or a red cross, **both `aria-hidden="true"`** with
+no text alternative. So the free tier read to a screen reader as though it *included* Advanced
+Analytics and Portfolio Tracking — the two things it exists to withhold. Red/green deficiency left a
+sighted reader with shape alone. Fixed with `sr-only` "Included: " / "Not included: " prefixes
+(WCAG 1.4.1 + 1.3.1). *Confirmed: every icon in the old file carries `aria-hidden="true"`.*
+
+Other real problems fixed, each with a test: plan names were `<p class="text-4xl">` — headings
+everywhere except in the accessibility tree; `<h5>` under `<h2>` in two sections (a two-level skip);
+five `<a href>` internal links that are **document navigations discarding the in-memory access
+token**; three `<a href="#">` footer entries that take focus, announce as links and scroll you to
+the top; a `hover:text-black` with no dark variant, so a footer link **vanishes in dark mode at the
+moment you point at it**; a `disabled` submit with no explanation, removed from both the tab order
+and screen-reader browse output so the reason never reached anyone (now `aria-disabled` +
+`aria-describedby`); repeated cards as `<div>`s rather than lists; and four `<section>`s with no
+accessible name, which are generic elements rather than landmarks.
+
+**Scroll-spy declined, on four arguments — the first two are the good ones.** (1) It creates **two
+authorities for one attribute**: `Link` already computes "am I current" and writes
+`aria-current="page"`, so scroll-spy means overriding that from outside and stripping the attribute
+back off. (2) It would **contradict the address bar** — `/#pricing` is a real, shareable,
+Back-able statement of where the reader is, and scroll-spy would move the underline off "Pricing"
+while the URL still said `#pricing`. Also: the header renders on every route but only one route has
+sections, and the test that remains would be one that hand-fires your own callback and asserts your
+own `setState` ran — a test of the mock. **What the user loses is stated plainly:** clicking a nav
+item still highlights it; free-scrolling past a section does not.
+
+**The skip link shipped as a `<button>`, not an anchor.** `<a href="#main-content">` would push
+`hash: 'main-content'` into the location the header reads for "which nav item is current" — so
+pressing the *first control on the page* would leave **nothing** highlighted. WCAG 2.4.1 asks for a
+mechanism to bypass blocks, not an anchor, and the classic fragment-skip-link failure is a browser
+that scrolls without moving focus, so doing the focus move explicitly is better on its merits.
+Mutation M8 keeps the `<button>` and adds a `navigate`, so **only** the location assertion fires —
+isolating the decision rather than passing for the wrong reason.
+
+**It overrode the ticket on `Who.jsx` / `Works.jsx` / `Home.styles.js` and was right.** They are dead
+code in the old repo: `Home.jsx` imports none of them, `Who`/`Works` render the literal strings
+"Who" and "Works", and `Home.styles.js` describes a scroll-snap layout the page never used.
+*Confirmed.* Porting them would have imported that fact rather than the page.
+
+**Copy issues flagged and deliberately not changed** — the marketing text is Stephen's. The
+orchestrator did fix one of them: `Workflow` said **"AverageInvestor" twice** on an Anvex-branded
+page, which is a rename leftover rather than chosen copy. The rest (the `sm:1/2` typo, the lone
+`h-full`, the light-mode footer border, three dead font-size classes) are listed in the build log
+because each changes appearance.
+
+12 mutations, 12 caught. It also declared one test that discriminates weakly rather than dropping
+it: *"the contact form still refuses to submit"* has no realistic mutation today because nothing
+submits — a guard against a future wiring-up, and said so.

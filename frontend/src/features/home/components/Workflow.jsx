@@ -40,23 +40,23 @@ import { CheckCircleIcon } from '@components/ui/icons'
  *
  * ## Copy that is wrong and was *not* changed
  *
- * Two of the four benefit paragraphs say **"AverageInvestor"** — the old product name — on
+ * Two of the four benefit paragraphs said **"AverageInvestor"** — the old product name — on
  * a page whose `Hero` says "Anvex". Ported verbatim, because the marketing copy is
  * Stephen's; flagged in the ANV-32 report as the one thing on this page that should
  * probably change before anybody reads it.
  */
 
-/** The four benefits, in the old file's order. Copy verbatim, `AverageInvestor` included. */
+/** The four benefits, in the old file's order. Copy is verbatim apart from the product name. */
 const BENEFITS = [
   {
     key: 'research',
     title: 'Streamlined Research',
-    body: 'AverageInvestor eliminates the complexity of traditional financial analysis tools. By using our intuitive platform, investors can quickly access comprehensive stock data and insights, saving valuable time and reducing confusion.',
+    body: 'Anvex eliminates the complexity of traditional financial analysis tools. By using our intuitive platform, investors can quickly access comprehensive stock data and insights, saving valuable time and reducing confusion.',
   },
   {
     key: 'access',
     title: 'Instant Market Access',
-    body: 'With AverageInvestor, investors have immediate access to real-time market data at their fingertips. This on-demand availability allows traders to respond to market movements faster, making them more effective in their investment decisions.',
+    body: 'With Anvex, investors have immediate access to real-time market data at their fingertips. This on-demand availability allows traders to respond to market movements faster, making them more effective in their investment decisions.',
   },
   {
     key: 'windows',

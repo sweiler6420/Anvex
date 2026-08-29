@@ -88,13 +88,26 @@ modified. What each contributes to Anvex:
 | ANV-29 | Login page | **Done** |
 | ANV-30 | Sign-up page | **Done** |
 | ANV-31 | Recovery and Unauthorized pages | **Done** |
-| ANV-32 | Home marketing page | Next |
-| ANV-33 … ANV-41 | see `backlog.md` | Not started |
+| ANV-32 | Home marketing page | **Done** |
+| ANV-33 | Bin-packing window system | Next |
+| ANV-34 … ANV-41 | see `backlog.md` | Not started |
 | ANV-43 | Backend password strength policy | Backlog — *found by ANV-30, high priority* |
 
-**3,153 tests total** — **2,811 backend** (2,497 with Docker stopped, DB/S3/broker tiers skipping)
-and **342 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check`
+**3,204 tests total** — **2,811 backend** (2,497 with Docker stopped, DB/S3/broker tiers skipping)
+and **393 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check`
 and `eslint` all clean. Container tiers genuinely execute: **276 DB**, **29 S3**, **9 broker**.
+
+**Cosmetic issues in the ported marketing copy, flagged and deliberately NOT changed** (they are
+Stephen's, and each changes appearance):
+- `Features` carries **`sm:1/2`** — a typo for `sm:w-1/2`, so it is not a Tailwind class at all and
+  the cards stay one-per-row until `lg`. One-line fix, but it changes the `sm` layout.
+- Only `Pricing`'s **middle card has `h-full`**, so at `sm` the Pro card stretches and its
+  neighbours do not.
+- `Footer`'s `border-neutral-700` has **no light variant** — a near-black top border in light mode.
+- `text-lg`, `text-md`, `lg:text-6xl` are **not in this Tailwind `fontSize` scale** (it stops at
+  `5xl`), so they emit nothing.
+- The Contact "sending is not connected yet" sentence is **the agent's wording**, not Stephen's —
+  the old page never admitted the button was dead. Replace freely.
 
 `AverageInvestorService` is now fully replaced and can be deleted. Two things it did that Anvex
 does not yet: **deep historical backfill** (its 43-month sweep — `ingest_month` accepts any explicit
@@ -338,17 +351,18 @@ such rule was ever written**. The four client-side rules are therefore not a mir
   an open decision, not an oversight.
 
 
-**For ANV-32 (Home marketing page):**
-- **`/unauthorized` is NOT yours** — ANV-31 owns it and it is done. (Its placeholder said `ANV-32`;
-  that was an ANV-27 error.)
-- **The scroll-spy question is yours.** ANV-28 did not port the old header's ~80-line
-  `IntersectionObserver` + scroll listener, because jsdom has neither layout nor the observer and
-  its sections did not exist yet. Active state currently comes from the router location via
-  `NAV_ACTIVE_OPTIONS`; the `features` / `workflow` / `pricing` / `contact` fragment ids the header
-  links to **arrive with your sections**. Decide whether to bring scroll-spy back and how you would
-  test it.
-- **The skip-link decision is yours** (ANV-28 deferred it): `<a href="#main-content">` would push a
-  hash into the location the header reads for "which nav item is current", so pressing skip
-  un-highlights the nav. `<main id="main-content">` already exists.
-- Keep the `route-home` testid; a page component belongs in `features/`, not `routes/` — the
-  case-collision rule is in §5.
+**For ANV-33 (bin-packing window system):**
+- **The only integration point is `Workflow`'s `demo` prop.** `HomePage.jsx` is where ANV-35 passes
+  `<InteractiveDesktop />`; nothing in `features/home/` imports the window system, so **ANV-33 needs
+  no edit to the marketing page at all.**
+- The panel it must fit: `data-testid="workflow-demo-panel"`, `relative overflow-hidden rounded-lg
+  p-4`, **`h-96` below `lg` and `h-full` at `lg`** — so the layout must survive both a fixed 24rem
+  height and a stretched flex height, and must not overflow the rounded panel.
+- `HomePage.test.jsx`'s two seam tests are the contract — keep them green.
+- **jsdom has no `ResizeObserver` and no layout — every measurement is 0.** If `BinPackingLayout`
+  measures its container, ANV-33 owns that stub. `src/test/setup.js` already holds `scrollTo` and
+  `scrollIntoView`; **add beside them, do not start a second setup file.**
+- `Workflow` renders without a router, which is what lets ANV-33 test the window system without
+  mounting the app.
+- Icons live in `@components/ui/icons` (eleven hand-rolled MIT Heroicons paths) — not inline, not
+  from a package.
