@@ -223,17 +223,6 @@ const BinPackingLayout = forwardRef(function BinPackingLayout(
     setFullscreenPrev(null)
   }, [cols, rows, fullscreenId, fullscreenPrev, commit])
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      addWindow: (win) => onWindowsChangeRef.current?.((prev) => [...prev, win]),
-      removeWindow: (id) =>
-        onWindowsChangeRef.current?.((prev) => prev.filter((w) => w.id !== id)),
-      replaceWindows: (next) => onWindowsChangeRef.current?.(() => next),
-    }),
-    [],
-  )
-
   /** Where the pointer is, in fractional grid cells. */
   const pointerCell = useCallback(
     (event) => {
@@ -446,6 +435,41 @@ const BinPackingLayout = forwardRef(function BinPackingLayout(
 
   const handleDragLeave = useCallback(() => setDragGhost(null), [setDragGhost])
 
+  /**
+   * Commit a template at a rectangle the caller has already fitted. **The one place a new
+   * window is created**, so a drop and a click-to-add (`addFromTemplate`, below) cannot
+   * disagree about ids, clamping, or which end of the list a new window goes on.
+   *
+   * @param {object} template a `WindowMenu` item's `window`
+   * @param {{x: number, y: number, width: number, height: number} | null} fit
+   * @returns {string | null} the new window's id, or `null` if it did not fit
+   */
+  const placeTemplate = useCallback(
+    (template, fit) => {
+      if (!fit) return null
+      // EQUIVALENT MUTANT, recorded rather than removed (ANV-33's rule; ANV-35 found it).
+      // Replacing this search with `{x: fit.x, y: fit.y}` changes no result the suite can
+      // see, because every `fit` reaching here came from `fitCenteredRect`, which was given
+      // the same `placed` array and therefore never returns an overlapping or out-of-bounds
+      // rectangle. It is ANV-33's safety net and it is kept: `fit` may be a *stale*
+      // `dragGhost` computed at the last `dragover`, so the arrangement it was fitted
+      // against is not guaranteed to be the one being committed to. The clamp below is the
+      // same net one step further on. Do not delete the pair to satisfy a mutation score.
+      const spot = findNearestFreePosition(fit, { cols, rows, placed: packedRef.current })
+      const created = {
+        ...template,
+        id: nextWindowId(),
+        x: Math.max(0, Math.min(cols - fit.width, spot.x)),
+        y: Math.max(0, Math.min(rows - fit.height, spot.y)),
+        width: fit.width,
+        height: fit.height,
+      }
+      commit([...packedRef.current, created])
+      return created.id
+    },
+    [cols, rows, commit],
+  )
+
   const handleDrop = useCallback(
     (event) => {
       if (!isReady || fullscreenId) return
@@ -456,22 +480,65 @@ const BinPackingLayout = forwardRef(function BinPackingLayout(
       const fit = dragGhost ?? previewForPointer(event, template)
       setDragGhost(null)
       clearPendingWindow()
-      if (!fit) return
-
-      const spot = findNearestFreePosition(fit, { cols, rows, placed: packedRef.current })
-      commit([
-        ...packedRef.current,
-        {
-          ...template,
-          id: nextWindowId(),
-          x: Math.max(0, Math.min(cols - fit.width, spot.x)),
-          y: Math.max(0, Math.min(rows - fit.height, spot.y)),
-          width: fit.width,
-          height: fit.height,
-        },
-      ])
+      placeTemplate(template, fit)
     },
-    [isReady, fullscreenId, dragGhost, previewForPointer, cols, rows, commit, setDragGhost],
+    [isReady, fullscreenId, dragGhost, previewForPointer, placeTemplate, setDragGhost],
+  )
+
+  /**
+   * Add a window from a template **with no pointer involved** (ANV-35).
+   *
+   * This is what a click-to-add palette calls, and it is the reason it can exist at all: the
+   * grid is measured *here* and nowhere else, so a parent holding the window list has no way
+   * to work out where a new window would fit. Exposing the answer as an imperative method
+   * keeps that knowledge in the component that has it rather than leaking `cols`/`rows` out
+   * to every caller.
+   *
+   * The rectangle is fitted around the **grid's centre** rather than the top-left, because a
+   * drop is centred on the cursor and this is the same gesture without one; `fitCenteredRect`
+   * then shrinks it toward its minimum if the grid is too small, exactly as a drop does, and
+   * `placeTemplate` moves it to the nearest free cell. `null` means it did not fit — the
+   * palette is not measured, so a caller that wants to say so needs to be told.
+   *
+   * @param {object} template a `WindowMenu` item's `window`
+   * @returns {string | null} the new window's id, or `null` if nothing was added
+   */
+  const addFromTemplate = useCallback(
+    (template) => {
+      // `!isReady` is an EQUIVALENT MUTANT and is kept for legibility: an unmeasured grid is
+      // 0 × 0, so `fitCenteredRect` below already answers `null` and removing the clause
+      // changes nothing the suite can observe. `!template` and `fullscreenId` are not —
+      // both have tests that fail without them.
+      if (!template || !isReady || fullscreenId) return null
+      const fit = fitCenteredRect(
+        {
+          centerX: cols / 2,
+          centerY: rows / 2,
+          width: template.width,
+          height: template.height,
+          minWidth: Math.max(1, template.minWidth || 1),
+          minHeight: Math.max(1, template.minHeight || 1),
+        },
+        { cols, rows, placed: packedRef.current },
+      )
+      return placeTemplate(template, fit)
+    },
+    [isReady, fullscreenId, cols, rows, placeTemplate],
+  )
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      addWindow: (win) => onWindowsChangeRef.current?.((prev) => [...prev, win]),
+      addFromTemplate,
+      removeWindow: (id) =>
+        onWindowsChangeRef.current?.((prev) => prev.filter((w) => w.id !== id)),
+      replaceWindows: (next) => onWindowsChangeRef.current?.(() => next),
+    }),
+    // `addFromTemplate` closes over the grid, so the handle is rebuilt when the grid changes
+    // shape. `ref` is stable and callers read `ref.current.x` at call time, so nothing sees a
+    // stale method — which was not true of the `[]` this replaced.
+    [addFromTemplate],
   )
 
   // ---------------------------------------------------------------------------------------

@@ -28,11 +28,27 @@ import WatchlistWidget from './components/WatchlistWidget'
  *
  * Colours are the window chrome's, not the widget's — they tint `DesktopWindow`'s header and
  * the palette chip, and nothing inside a widget reads them.
+ *
+ * ## `network` is a required field, and it is what makes the public page safe (ANV-35)
+ *
+ * Two of these widgets fetch on mount through `authApi`, so on a page a logged-out visitor
+ * can reach they 401 and render an error state. The marketing demo therefore offers a
+ * subset — but a subset is only as good as the rule that derives it, and a hand-written list
+ * of three names in some other file is a literal that drifts the moment a sixth widget is
+ * added by somebody who never opens that file.
+ *
+ * So the fact lives here, on the row, beside the `content` it is a fact about: **`network`
+ * says whether mounting this widget issues an HTTP request**, and `publicPalette.js` keeps
+ * only the rows that say `false`. The direction is deliberate — that filter is an *opt-in*,
+ * so a new row that forgets the flag is left out of the public page rather than quietly
+ * admitted to it, and `palette.test.jsx` fails the suite for the missing flag as well. Both
+ * halves of "nobody thought about it" end up somewhere safe.
  */
 export const WIDGET_PALETTE = [
   {
     name: 'Counter',
     color: '#3b82f6',
+    network: false,
     window: {
       title: 'Counter',
       color: '#3b82f6',
@@ -46,6 +62,7 @@ export const WIDGET_PALETTE = [
   {
     name: 'Info',
     color: '#8b5cf6',
+    network: false,
     window: {
       title: 'Info',
       color: '#8b5cf6',
@@ -59,6 +76,7 @@ export const WIDGET_PALETTE = [
   {
     name: 'Echo',
     color: '#f59e0b',
+    network: false,
     window: {
       title: 'Echo input',
       color: '#f59e0b',
@@ -72,6 +90,8 @@ export const WIDGET_PALETTE = [
   {
     name: 'Chart',
     color: '#06b6d4',
+    // `StockChartWidget` fetches `/v1/stocks/by-ticker/AAPL/data` on mount, through `authApi`.
+    network: true,
     window: {
       title: 'Price chart',
       color: '#06b6d4',
@@ -85,6 +105,8 @@ export const WIDGET_PALETTE = [
   {
     name: 'Watchlist',
     color: '#22c55e',
+    // `WatchlistWidget` fetches `/v1/watchlists` on mount, through `authApi`.
+    network: true,
     window: {
       title: 'Watchlist',
       color: '#22c55e',

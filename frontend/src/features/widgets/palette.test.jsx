@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { isValidElement } from 'react'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -8,6 +8,7 @@ import { pageResponse } from '@test/msw/handlers'
 import { server } from '@test/msw/server'
 
 import { WIDGET_PALETTE } from './palette'
+import { PUBLIC_WIDGET_PALETTE } from './publicPalette'
 
 /**
  * ANV-34 — the palette ANV-35 drags onto the desktop.
@@ -103,6 +104,66 @@ describe('WIDGET_PALETTE — every entry mounts with no props (WIRING)', () => {
       const regions = await screen.findAllByRole('region')
       expect(regions).toHaveLength(1)
       expect(regions[0].getAttribute('aria-label')).toBeTruthy()
+    },
+  )
+})
+
+describe('the public subset (ANV-35) — what the marketing demo may offer', () => {
+  it('makes every row declare whether it touches the network', () => {
+    // The flag is *required*, not optional-with-a-default. A row that forgets it is excluded
+    // from the public palette by the strict `=== false` — safe — and fails right here, so
+    // "nobody thought about it" is never silent.
+    for (const item of WIDGET_PALETTE) {
+      expect(typeof item.network, `${item.name} does not declare \`network\``).toBe('boolean')
+    }
+  })
+
+  it('keeps only the rows that say false', () => {
+    expect(PUBLIC_WIDGET_PALETTE).toEqual(
+      WIDGET_PALETTE.filter((item) => item.network === false),
+    )
+  })
+
+  it('is a proper subset, so "the public demo is pure" is a claim and not a tautology', () => {
+    expect(PUBLIC_WIDGET_PALETTE.length).toBeGreaterThan(0)
+    expect(PUBLIC_WIDGET_PALETTE.length).toBeLessThan(WIDGET_PALETTE.length)
+  })
+
+  it.each(PUBLIC_WIDGET_PALETTE.map((item) => [item.name, item]))(
+    '%s really does mount without issuing a request',
+    async (_name, item) => {
+      // The flag is a claim somebody typed; this is the check on it. `beforeEach` above
+      // installs handlers for the two fetching widgets, so a mis-flagged row would be
+      // answered rather than erroring — which is exactly why this counts requests instead of
+      // relying on `onUnhandledRequest: 'error'`.
+      const seen = []
+      const record = ({ request }) => seen.push(request.url)
+      server.events.on('request:start', record)
+
+      try {
+        render(<div>{item.window.content}</div>)
+        await screen.findByRole('region')
+        expect(seen).toEqual([])
+      } finally {
+        server.events.removeAllListeners('request:start')
+      }
+    },
+  )
+
+  it.each(WIDGET_PALETTE.filter((item) => item.network).map((item) => [item.name, item]))(
+    '%s really does issue one — the flag is not decoration',
+    async (_name, item) => {
+      const seen = []
+      const record = ({ request }) => seen.push(request.url)
+      server.events.on('request:start', record)
+
+      try {
+        render(<div>{item.window.content}</div>)
+        await screen.findByRole('region')
+        await waitFor(() => expect(seen.length).toBeGreaterThan(0))
+      } finally {
+        server.events.removeAllListeners('request:start')
+      }
     },
   )
 })

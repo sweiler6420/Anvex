@@ -28,6 +28,7 @@ export { default as WatchlistWidget } from './components/WatchlistWidget'
 export { default as WidgetFrame } from './components/WidgetFrame'
 
 export { WIDGET_PALETTE } from './palette'
+export { PUBLIC_WIDGET_PALETTE } from './publicPalette'
 
 export {
   fetchStockSeries,

@@ -1,3 +1,5 @@
+import { InteractiveDesktop } from '@features/workspace'
+
 import Contact from './Contact'
 import Features from './Features'
 import Footer from './Footer'
@@ -34,10 +36,17 @@ import Workflow from './Workflow'
  * There is no behaviour, no copy and no layout here to preserve. Said plainly in the ANV-32
  * report rather than quietly skipped.
  *
- * ## Not ported: `InteractiveDesktop`
+ * ## `InteractiveDesktop` (ANV-35)
  *
- * Deliberately — it needs the bin-packing window system (ANV-33) and the widgets (ANV-34),
- * and lands in ANV-35. The seam is `Workflow`'s `demo` prop; see that file.
+ * It arrives through `Workflow`'s `demo` prop, which is the whole change to this page — the
+ * seam ANV-32 left rather than a stub import or a TODO. `features/home/` still does not
+ * depend on the window system: `features/workspace/` composes ANV-33's `BinPackingLayout`
+ * with ANV-34's widgets, and this file names it once.
+ *
+ * **No props, deliberately.** `InteractiveDesktop`'s default palette is the subset of
+ * widgets that make no network call, because this page is read by logged-out visitors and
+ * the Chart and Watchlist widgets fetch through `authApi`. The full palette is `/research`'s,
+ * and it opts in there.
  */
 export default function HomePage() {
   return (
@@ -46,7 +55,7 @@ export default function HomePage() {
     <div data-testid="route-home" className="min-h-screen px-6 pt-20">
       <Hero />
       <Features />
-      <Workflow />
+      <Workflow demo={<InteractiveDesktop />} />
       <Pricing />
       <Contact />
       <Footer />

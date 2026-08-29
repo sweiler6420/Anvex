@@ -587,3 +587,160 @@ describe('the owner s state is the source of truth (WIRING)', () => {
     expect(screen.queryByTestId('desktop-window-a')).not.toBeInTheDocument()
   })
 })
+
+describe('addFromTemplate — adding a window with no pointer (ANV-35)', () => {
+  /**
+   * The imperative half of ANV-35's click-to-add palette. The grid is measured here and
+   * nowhere else, so a parent holding the window list cannot work out where a new window
+   * fits; this method is how it asks.
+   *
+   * WIRING, apart from the two REAL cases marked below: the placement is real geometry
+   * (`../geometry/rects.test.js`), but the grid it places into is invented.
+   */
+  const TEMPLATE = {
+    title: 'From the palette',
+    color: '#8b5cf6',
+    width: 6,
+    height: 4,
+    minWidth: 2,
+    minHeight: 2,
+    content: <span>widget</span>,
+  }
+
+  /** Gives a test the ref without re-rendering the tree on every read. */
+  function withApi(props = {}) {
+    const api = { current: null }
+
+    function Harness() {
+      const ref = useRef(null)
+      api.current = ref
+      return <Host apiRef={ref} {...props} />
+    }
+
+    render(<Harness />)
+    return api
+  }
+
+  it('creates the window, returns its id, and mounts the template s content', () => {
+    const api = withApi({ initial: [win('a')] })
+
+    let id
+    act(() => {
+      id = api.current.current.addFromTemplate(TEMPLATE)
+    })
+
+    expect(id).toBe('win_1')
+    const added = screen.getByTestId('desktop-window-win_1')
+    expect(within(added).getByText('widget')).toBeInTheDocument()
+    expect(within(added).getByText('From the palette')).toBeInTheDocument()
+  })
+
+  it('places it inside the grid at the size the template asked for', () => {
+    const api = withApi({ initial: [] })
+
+    act(() => api.current.current.addFromTemplate(TEMPLATE))
+
+    // 40 × 20 cells at 20px, no offset. Centred on the grid's middle and 6 × 4 in size, so
+    // the top-left lands at (17, 8) — this is the geometry's answer, not a rounded guess.
+    expect(screen.getByTestId('desktop-window-win_1')).toHaveStyle({
+      width: '120px',
+      height: '80px',
+      left: '340px',
+      top: '160px',
+    })
+  })
+
+  it('does not overlap what is already there', () => {
+    // A window across the whole top of the grid: the new one must go below it, not onto it.
+    const api = withApi({ initial: [win('band', { x: 0, y: 0, width: 40, height: 6 })] })
+
+    act(() => api.current.current.addFromTemplate(TEMPLATE))
+
+    const top = Number(
+      screen.getByTestId('desktop-window-win_1').style.top.replace('px', ''),
+    )
+    expect(top).toBeGreaterThanOrEqual(6 * 20)
+  })
+
+  it('refuses, and says so with null, when the grid is full', () => {
+    // One window covering all 40 × 20 cells, with a minimum that keeps it there. The
+    // template's own minimum is 2 × 2, so there is genuinely nowhere legal for it.
+    const api = withApi({
+      initial: [win('full', { width: 40, height: 20, minWidth: 40, minHeight: 20 })],
+    })
+
+    let id
+    act(() => {
+      id = api.current.current.addFromTemplate(TEMPLATE)
+    })
+
+    expect(id).toBeNull()
+    expect(screen.queryByTestId('desktop-window-win_1')).not.toBeInTheDocument()
+  })
+
+  it('refuses while the desktop is unmeasured (REAL — this is what jsdom always reports)', () => {
+    const api = { current: null }
+
+    function Harness() {
+      const ref = useRef(null)
+      api.current = ref
+      return (
+        <BinPackingLayout
+          ref={ref}
+          windows={[]}
+          onWindowsChange={() => {}}
+          useContainerSize={fixedSize(0, 0)}
+        />
+      )
+    }
+
+    render(<Harness />)
+
+    let id
+    act(() => {
+      id = api.current.current.addFromTemplate(TEMPLATE)
+    })
+
+    expect(id).toBeNull()
+  })
+
+  it('refuses while a window is fullscreen, exactly as a drop does', async () => {
+    // The arrangement underneath a fullscreen window is frozen — the reflow effect declines
+    // to run while `fullscreenId` is set — so a window added now would be packed against a
+    // grid nobody is maintaining, behind an overlay that swallows its controls.
+    const user = userEvent.setup()
+    const api = withApi({ initial: [win('a')] })
+
+    await user.click(screen.getByRole('button', { name: 'Fill the desktop' }))
+
+    let id
+    act(() => {
+      id = api.current.current.addFromTemplate(TEMPLATE)
+    })
+
+    expect(id).toBeNull()
+    expect(screen.queryByTestId('desktop-window-win_1')).not.toBeInTheDocument()
+  })
+
+  it('refuses a missing template rather than creating an untitled window (REAL)', () => {
+    const api = withApi({ initial: [] })
+
+    let id
+    act(() => {
+      id = api.current.current.addFromTemplate(null)
+    })
+
+    expect(id).toBeNull()
+    expect(screen.queryByTestId('desktop-window-win_1')).not.toBeInTheDocument()
+  })
+
+  it('gives each added window its own id, so two of one widget are two windows', () => {
+    const api = withApi({ initial: [] })
+
+    act(() => api.current.current.addFromTemplate(TEMPLATE))
+    act(() => api.current.current.addFromTemplate(TEMPLATE))
+
+    expect(screen.getByTestId('desktop-window-win_1')).toBeInTheDocument()
+    expect(screen.getByTestId('desktop-window-win_2')).toBeInTheDocument()
+  })
+})

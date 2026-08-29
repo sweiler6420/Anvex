@@ -4,9 +4,11 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ANONYMOUS_NAV_ITEMS } from '@components/layout/navItems'
+import { PUBLIC_WIDGET_PALETTE, WIDGET_PALETTE } from '@features/widgets'
 import { createAppRouter } from '@lib/router'
 import { AuthContext } from '@providers/AuthContext'
 import { ThemeProvider } from '@providers/ThemeProvider'
+import { server } from '@test/msw/server'
 
 import Workflow from './Workflow'
 
@@ -296,6 +298,53 @@ describe('the contact form', () => {
     // nothing navigated.
     expect(location().pathname).toBe('/')
     expect(page().getByLabelText('Name')).toHaveValue('Ada')
+  })
+})
+
+describe('the interactive desktop in the workflow panel (ANV-35)', () => {
+  it('mounts inside the panel the seam promised', async () => {
+    renderHome()
+    await screen.findByTestId('route-home')
+
+    const panel = screen.getByTestId('workflow-demo-panel')
+    expect(within(panel).getByTestId('interactive-desktop')).toBeInTheDocument()
+    expect(screen.queryByTestId('workflow-demo-placeholder')).not.toBeInTheDocument()
+  })
+
+  it('offers only the widgets that make no network call', async () => {
+    // **Derived from the palette, not restated.** Naming the three here would keep passing
+    // on the day a fetching widget is mis-flagged, which is the mistake the split exists to
+    // catch. This page is read by logged-out visitors and `authApi` would 401 at them.
+    renderHome()
+    await screen.findByTestId('route-home')
+
+    const offered = within(screen.getByTestId('window-menu'))
+      .getAllByRole('listitem')
+      .map((chip) => chip.textContent.trim())
+
+    expect(offered).toEqual(PUBLIC_WIDGET_PALETTE.map((item) => item.name))
+    for (const item of WIDGET_PALETTE.filter((entry) => entry.network)) {
+      expect(offered).not.toContain(item.name)
+    }
+  })
+
+  it('issues no requests at all while a visitor is on it', async () => {
+    // `onUnhandledRequest: 'error'` alone is not enough: a widget that catches its own 401
+    // and renders an error state would leave this suite green while showing a broken panel
+    // to every logged-out visitor. So count what MSW actually saw.
+    const seen = []
+    const record = ({ request }) => seen.push(request.url)
+    server.events.on('request:start', record)
+
+    try {
+      renderHome()
+      await screen.findByTestId('route-home')
+      await screen.findByTestId('interactive-desktop')
+
+      expect(seen).toEqual([])
+    } finally {
+      server.events.removeAllListeners('request:start')
+    }
   })
 })
 

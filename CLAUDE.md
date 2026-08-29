@@ -1586,6 +1586,68 @@ does not throw.
   one place a user reads them back, and re-deriving them is one more chance to attach a zone
   that was never there.
 
+### Composing two features, and shipping one of them to the public (ANV-35)
+
+`features/workspace/` is `InteractiveDesktop`: ANV-33's window system with ANV-34's widgets in
+it, mounted in `Workflow`'s `demo` prop on `/` and destined for `/research`. It is almost
+entirely composition, and the rules below are the ones composition turned out to need.
+
+- **A composition of two features is its own feature, not a file in either of them.** The
+  window system may not import the widgets (that is the dependency `features/desktop/index.js`
+  exists to prevent) and the marketing page may not import the window system (that is why
+  ANV-32 left a `demo` prop). Where two features meet, a third folder is the only home that
+  does not invert somebody's dependency — and it is also what lets `/` and `/research` share
+  one component with different arguments. Promote on the *composition*, the same way §5
+  promotes a helper on the second consumer.
+- **A capability that decides where a component may be *used* is a required field on the data,
+  and the permitted set is derived from it.** Two of the five widgets fetch through `authApi`
+  on mount, so on a page a logged-out visitor reaches they 401 and render an error state. The
+  fix is not a list of three safe names in the page's file — that is a literal, and it drifts
+  the moment a sixth widget is added by somebody who never opens that file. Each palette row
+  declares `network: true|false` beside the `content` it is a fact about, and
+  `PUBLIC_WIDGET_PALETTE` is `filter(item => item.network === false)`. Three properties, and
+  all three are load-bearing: the filter is an **opt-in**, so a row that forgets the flag is
+  *excluded* rather than admitted; a test asserts every row declares a **boolean**, so
+  forgetting it is also not silent; and the derived list is asserted a **proper subset**, so
+  marking everything safe cannot make "the public page is pure" true and worthless. The
+  component then **defaults to the safe set** and the privileged caller opts in
+  (`items={WIDGET_PALETTE}`) — the default is the case nobody remembers to think about.
+- **Prove "this page makes no requests" by counting requests, not by leaning on
+  `onUnhandledRequest: 'error'`.** MSW's erroring default catches a call nobody mocked, but a
+  widget that catches its own failure and renders an error state absorbs it — the suite stays
+  green while every logged-out visitor sees a broken panel. Attach a `request:start` listener,
+  drive the page as a user would (open one of everything it offers — an effect that never
+  mounts never fetches), and assert the list is empty. Install the listener **in the file that
+  cares**, never in `src/test/setup.js`: a shared listener is state leaking between tests, the
+  same rule `window.scrollTo` follows. And write the discriminating half — the *same* drive
+  with the full palette, asserting requests **were** made — or "no requests" also passes for a
+  page that renders nothing.
+- **When the knowledge a caller needs is a measurement the component owns, expose the answer
+  imperatively rather than leaking the measurement.** A palette that adds a window on click
+  has to know where a window fits, and only `BinPackingLayout` has the grid. Publishing
+  `cols`/`rows` upward would make every caller re-implement the placement; `addFromTemplate`
+  gives the caller the *answer* (`id`, or `null` when there is no room) and keeps the geometry
+  where the geometry is. It returns `null` rather than throwing, because "the grid is full" is
+  an ordinary outcome the UI has to say something about — and the caller announces it, since a
+  button that does nothing and says nothing is indistinguishable from a broken one.
+- **Adding drag to a button is additive; adding a button to a drag is not, unless the button
+  also drags.** ANV-33 flagged `WindowMenu`'s `draggable` `<li>`s as mouse-only and ANV-34
+  answered the same problem in the watchlist with buttons. Here the chip's label becomes a
+  `<button>` *inside* the unchanged `<li>` — so the list markup, the `draggable` attribute and
+  the payload hand-off are untouched — and **the button carries `draggable` and the drag
+  handlers itself**, because a form control inside a draggable ancestor swallows the gesture in
+  several browsers. Without that the keyboard affordance would have silently taken the drag
+  away from the users it was for. The name is the action (`Add Counter`), with the visible
+  label a substring of it (WCAG 2.5.3), and the affordance is optional: with no `onAdd` the
+  component renders exactly what it rendered before, which is what keeps the older ticket's
+  tests honest rather than rewritten.
+- **A `.jsx` module that exports *data* trips `react-refresh/only-export-components` on its
+  second capitalised export, even with no component in the file.** One `export const
+  WIDGET_PALETTE = [...]` is fine; adding `PUBLIC_WIDGET_PALETTE` beside it warns. This is
+  §5's split-the-file rule (ANV-25, ANV-27) arriving from an unexpected direction, and the
+  split is free: a filter over an existing array needs no JSX, so it moves to a `.js` module of
+  its own. Do not reach for an `eslint-disable` — there is not one in the repo.
+
 ### Frontend test harness (ANV-23)
 
 The mirror of §6's backend rules: **extend the one setup file and the one MSW server; never start a
