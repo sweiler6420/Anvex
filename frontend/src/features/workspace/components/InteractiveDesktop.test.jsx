@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -224,6 +224,102 @@ describe('click-to-add — the last mouse-only path (WIRING for the mount, REAL 
 
     expect(screen.getByTestId('desktop-announcement')).toHaveTextContent('No room for Counter.')
     expect(desktopWindows()).toEqual([])
+  })
+})
+
+describe('the two props ANV-36 added', () => {
+  /** A one-window arrangement a caller could not get from the default set. */
+  const custom = [
+    {
+      id: 'caller-supplied',
+      title: 'Supplied',
+      color: '#3b82f6',
+      x: 0,
+      y: 0,
+      width: 4,
+      height: 4,
+      minWidth: 2,
+      minHeight: 2,
+      content: null,
+    },
+  ]
+
+  it('opens on the caller s arrangement instead of the demo s (WIRING — invented size)', () => {
+    render(<InteractiveDesktop initialWindows={custom} useContainerSize={size800x400} />)
+
+    expect(desktopWindows()).toEqual(['desktop-window-caller-supplied'])
+  })
+
+  it('still opens on the demo s three when nobody says otherwise (WIRING)', () => {
+    // The default is what `/` takes, and it must not become "whatever the last caller
+    // passed" — this is the assertion that fails if the prop loses its default.
+    render(<InteractiveDesktop useContainerSize={size800x400} />)
+
+    expect(desktopWindows()).toEqual([
+      'desktop-window-demo-counter',
+      'desktop-window-demo-info',
+      'desktop-window-demo-echo',
+    ])
+  })
+
+  it('ignores a later change to initialWindows, because the desktop is the user s now', async () => {
+    // Read once, in the lazy state initialiser. A component that treated the prop as
+    // controlled would throw away every window the user had moved on any parent re-render.
+    const user = userEvent.setup()
+    const { rerender } = render(
+      <InteractiveDesktop initialWindows={custom} useContainerSize={size800x400} />,
+    )
+    await user.click(menu().getByRole('button', { name: 'Add Counter' }))
+    expect(desktopWindows()).toContain('desktop-window-win_1')
+
+    rerender(<InteractiveDesktop initialWindows={[]} useContainerSize={size800x400} />)
+
+    expect(desktopWindows()).toContain('desktop-window-caller-supplied')
+    expect(desktopWindows()).toContain('desktop-window-win_1')
+  })
+
+  it('lets a holder of the ref open a window, and announces it the same way', () => {
+    // `/research`'s securities list is the caller. The announcement is the REAL half: it
+    // belongs to `openWindow`, so a window opened from outside and a window opened from a
+    // chip say the same thing in the same live region.
+    const ref = { current: null }
+    render(<InteractiveDesktop ref={ref} useContainerSize={size800x400} />)
+
+    // `act` because this is a state update driven from outside React's event system —
+    // exactly the case the securities list produces, one `onClick` further out.
+    let id = null
+    act(() => {
+      id = ref.current.openWindow(PUBLIC_WIDGET_PALETTE[0])
+    })
+
+    expect(id).toBe('win_1')
+    expect(desktopWindows()).toContain('desktop-window-win_1')
+    expect(screen.getByTestId('desktop-announcement')).toHaveTextContent('Counter added.')
+  })
+
+  it('tells the ref holder about a refusal instead of pretending (REAL)', () => {
+    // `null`, not a throw and not a silent nothing: "there is nowhere to put it" is an
+    // ordinary outcome and the caller has to be able to see it.
+    const ref = { current: null }
+    render(<InteractiveDesktop ref={ref} />)
+
+    let id = 'not-null'
+    act(() => {
+      id = ref.current.openWindow(PUBLIC_WIDGET_PALETTE[0])
+    })
+
+    expect(id).toBeNull()
+    expect(screen.getByTestId('desktop-announcement')).toHaveTextContent('No room for Counter.')
+  })
+
+  it('exposes only openWindow, not the layout s whole handle (REAL)', () => {
+    // Deliberately narrow. `addWindow`/`removeWindow`/`replaceWindows` would let a caller
+    // write the arrangement behind this component's back, and a bare `addFromTemplate`
+    // would move the announcement out of the one place that owns it.
+    const ref = { current: null }
+    render(<InteractiveDesktop ref={ref} useContainerSize={size800x400} />)
+
+    expect(Object.keys(ref.current)).toEqual(['openWindow'])
   })
 })
 

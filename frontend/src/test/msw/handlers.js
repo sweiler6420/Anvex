@@ -55,4 +55,23 @@ export const handlers = [
 
   // Readiness, likewise unversioned.
   http.get(apiUrl('/health/ready'), () => HttpResponse.json({ status: 'ready' })),
+
+  /**
+   * The securities list, **empty** (ANV-36).
+   *
+   * The one resource that belongs in the defaults rather than in a `server.use`, and the
+   * reason is a fact about the application rather than about any test: `/research` is
+   * `DEFAULT_AUTHENTICATED_ROUTE`, so *every* journey that signs a user in — a login, a
+   * guard's round trip, a persist-login boot, the header's nav — lands on a page that
+   * fetches this on mount. Five test files reach it without caring about it, and making
+   * each of them mock a resource its subject has nothing to do with would put the noise in
+   * the wrong place.
+   *
+   * An **empty** page is what keeps that safe: it is the emptiest truthful answer this
+   * endpoint can give, so nothing can lean on it to assert anything, and a test that does
+   * care supplies its own rows with `server.use`. The rule it does not break is the one
+   * that matters — it is built through `pageResponse`, so it still cannot invent a body the
+   * backend would never send.
+   */
+  http.get(apiUrl('/v1/stocks'), () => pageResponse([])),
 ]

@@ -1677,6 +1677,84 @@ second.**
   output. A plain no-op assignment, not a shared `vi.fn()` — a spy in the setup file is state
   leaking between tests, and a test that genuinely cares installs its own.
 
+### The pages behind the guard, and the two shapes of "not yet" (ANV-36)
+
+`features/research/` and `features/portfolio/` are the authenticated routes, and they close
+the frontend. ANV-29..32's page conventions all still hold; these are the rules the *first*
+pages behind the guard turned out to need.
+
+- **A demo's opening arrangement is a literal; a real surface's is derived.** ANV-35's
+  `InteractiveDesktop` holds `INITIAL_WINDOWS` because the marketing demo's three windows
+  exist nowhere else. `/research` takes an `initialWindows` prop, and what it passes is
+  **computed from `WIDGET_PALETTE`'s `network` flag** rather than written out again:
+  `PUBLIC_WIDGET_PALETTE` is `network === false` (what a logged-out visitor may be *offered*)
+  and `RESEARCH_WINDOWS` is `network === true` (what a signed-in user should already have
+  *open*). One flag, read in both directions, and a test asserts the two partition the
+  palette — so a row that declares neither is loud rather than merely safe. Re-using each
+  row's `window` template is what stops the chart's size, colour and content living in two
+  places; the test asserts the `content` is the **same element object**, not a copy.
+- **The prop is read once, in the lazy state initialiser, and the test for that is a
+  re-render.** After the first paint the arrangement belongs to the user, so a caller must
+  not be able to reset a desktop by re-rendering with a new array. (The lazy `() =>` wrapper
+  is itself an equivalent mutant once the value is a prop — recorded at the line, not
+  deleted.)
+- **When a page must drive a component that owns a measurement, forward an imperative handle
+  that answers the question — and keep it narrower than the one it wraps.**
+  `InteractiveDesktop` exposes exactly `openWindow(item) -> id | null`: it wraps
+  `BinPackingLayout.addFromTemplate` *and the announcement*, so a window opened from the
+  securities list and a window opened from a palette chip say the same thing in the same live
+  region. Forwarding the layout's own handle would have let a page write the arrangement
+  behind the component's back; forwarding a bare `addFromTemplate` would have moved the
+  announcement out of the one place that owns it. A test asserts `Object.keys(handle)`.
+- **A page ticket forwards `useContainerSize` too, or its own tests cannot see a window.**
+  ANV-33's rule reaches one level further out than ANV-33 needed: the route renders
+  `<ResearchPage />` with no props, so the seam has to be threaded through the *page* for a
+  test to fabricate a size beside the assertion it supports. Say in the file which tests are
+  REAL and which are WIRING, at the page as well as at the component.
+- **"The page fetches from the API" is proved by a test whose subject is not a window.**
+  jsdom renders an unmeasured desktop and therefore mounts no widgets and issues no requests
+  — which is correct, and which meant that before `/research` had a securities list there was
+  **no way to drive the refresh path through the real application at all**. A page behind the
+  guard that only fetches from inside a measured component cannot have its cold-load path
+  tested end to end. Give it one plain, unmeasured surface that reads the API.
+- **The cold load is a real path and it needs a real test.** Stored refresh token, no access
+  token, guard admits on the first `beforeLoad`, first protected call is a 401 `unauthorized`,
+  one refresh, one replay with the rotated bearer, data on screen. Mock the refresh endpoint
+  **single-use** — rotating and refusing a spent token, as the real one does — or the test
+  passes for an implementation that refreshes twice. Assert the *stored* refresh token
+  afterwards: storing only the access token breaks the next refresh and nothing on screen
+  shows it until the second expiry.
+- **A default MSW handler is for a resource the *application* fetches on every signed-in
+  journey, not for a test's behaviour.** `/research` is `DEFAULT_AUTHENTICATED_ROUTE`, so a
+  login, a guard's round trip, a persist-login boot and the header's nav all land on a page
+  that fetches `GET /v1/stocks`; five test files reach it without caring about it. It is
+  therefore in `src/test/msw/handlers.js` — answering an **empty** page, the emptiest truthful
+  answer, so nothing can lean on it — and a test that cares supplies rows with `server.use`.
+  Adding a default is still the exception: the trigger is "the shell reaches it on a journey
+  whose subject is something else", not "several tests need it".
+- **A developer's placeholder is not copy, and ANV-32's "port the wording as found" does not
+  protect it.** `Portfolio.jsx`'s one line was "Portfolio content goes here..." — a note the
+  author wrote to themselves, sitting where a sentence addressed to the reader goes, in the
+  same category as the `<a href="#">` ANV-32 refused to transcribe. ANV-31's rule applies
+  instead: *a screen for a state the app cannot currently reach says so*. Verify the absence
+  before naming it (there is no holdings model, no positions table, no route, no quote) and
+  say what is missing rather than rendering an empty table whose column headers describe a
+  product that does not exist. Everything that genuinely *is* copy — `Research.jsx`'s three
+  sentences, its two card headings — is ported verbatim and reported.
+- **A port that adds the thing the old page was a label for keeps the label.** The two
+  "Stock Analysis" / "Market Research" cards are ported unchanged and the working surface is
+  added *beside* them, not in place of them, so the diff against the original is readable in
+  both directions and deleting them stays a separate, obvious decision for the page's owner.
+- **`RoutePlaceholder` is gone.** ANV-27 wrote it to be deleted a line at a time as the pages
+  landed; ANV-36 landed the last two, so the module went with them. A page ticket that leaves
+  the placeholder behind has left dead code, not a safety net.
+- **axios already drops `undefined` *and* `null` query parameters**, verified rather than
+  assumed (`axios.getUri({url, params: {limit: undefined, offset: null, search: ''}})` is
+  `/v1/stocks?search=`). A `definedOnly`-style filter in a feature's `api.js` is therefore an
+  equivalent mutant — keep it if you want the request to be independent of a library default,
+  but record that at the line, and do not repeat `features/widgets/api.js`'s claim that `null`
+  survives it. It does not.
+
 ---
 
 ## 6. Testing

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { forwardRef, useCallback, useImperativeHandle, useRef, useState } from 'react'
 
 import { BinPackingLayout, WindowMenu } from '@features/desktop'
 import { CounterWidget, PUBLIC_WIDGET_PALETTE, StaticInfoWidget, TextInputWidget } from '@features/widgets'
@@ -33,6 +33,17 @@ import { CounterWidget, PUBLIC_WIDGET_PALETTE, StaticInfoWidget, TextInputWidget
  * The subset is derived in `features/widgets/palette.jsx` from a flag on each row rather
  * than listed here, so a sixth widget added by somebody who never opens this file is
  * excluded rather than admitted. See that file for the full argument.
+ *
+ * ---------------------------------------------------------------------------------------
+ * ## What ANV-36 added, and why each is a prop rather than a second component
+ *
+ *  - **`initialWindows`** — `/` opens on three pure widgets because it is a demo of a
+ *    window manager; `/research` opens on the two that need a session, because that is
+ *    what a signed-in user came for. The arrangement is read **once**, in the lazy state
+ *    initialiser, so a caller cannot reset a user's desktop by re-rendering with a new
+ *    array. See `../researchWindows.js` for the research set, which is *derived* from the
+ *    palette rather than restated.
+ *  - **An imperative handle exposing exactly `openWindow`** — see below.
  *
  * ---------------------------------------------------------------------------------------
  * ## Two contracts `BinPackingLayout` will not warn you about
@@ -74,7 +85,7 @@ import { CounterWidget, PUBLIC_WIDGET_PALETTE, StaticInfoWidget, TextInputWidget
  */
 
 /**
- * The demo's opening arrangement, in grid cells.
+ * The **demo's** opening arrangement, in grid cells — the default for `initialWindows`.
  *
  * Sized for the smallest panel it has to look right in: `Workflow`'s is `h-96` below `lg`,
  * which after the strip and the caption leaves roughly 13 rows, and about 22 columns beside
@@ -125,12 +136,27 @@ const INITIAL_WINDOWS = [
  * @param {object} props
  * @param {Array<{name: string, color: string, window: object}>} [props.items] the palette.
  *   Defaults to the rows that make no network call; `/research` passes `WIDGET_PALETTE`.
+ * @param {Array<object>} [props.initialWindows] the opening arrangement. Read **once**, in
+ *   a lazy state initialiser — a later change to this prop is ignored, because after the
+ *   first render the arrangement belongs to the user (ANV-36).
  * @param {Function} [props.useContainerSize] ANV-33's measurement seam, forwarded so a test
  *   can fabricate a size in the file that asserts against it. Never passed in production.
+ * @param {React.Ref<{openWindow: Function}>} ref the imperative handle described above.
  */
-export default function InteractiveDesktop({ items = PUBLIC_WIDGET_PALETTE, useContainerSize }) {
+const InteractiveDesktop = forwardRef(function InteractiveDesktop(
+  { items = PUBLIC_WIDGET_PALETTE, initialWindows = INITIAL_WINDOWS, useContainerSize },
+  ref,
+) {
   const apiRef = useRef(null)
-  const [windows, setWindows] = useState(() => INITIAL_WINDOWS)
+  /**
+   * Read once. The lazy form is an **EQUIVALENT MUTANT** now that the value is a prop —
+   * `useState(initialWindows)` passes the whole suite, because the argument is already
+   * evaluated either way and `useState` ignores it after the first render. It is kept for
+   * what it says: this is an *initial* value, not a controlled one, and a reader who
+   * changes it to look controlled has to delete the arrow first. Recorded rather than
+   * simplified (ANV-33's rule about the wrong half of a redundant pair).
+   */
+  const [windows, setWindows] = useState(() => initialWindows)
 
   /**
    * Adding a window is invisible to a screen reader — a new absolutely-positioned box
@@ -141,15 +167,37 @@ export default function InteractiveDesktop({ items = PUBLIC_WIDGET_PALETTE, useC
    */
   const [announcement, setAnnouncement] = useState('')
 
-  const handleAdd = useCallback((item) => {
-    const id = apiRef.current?.addFromTemplate(item.window)
+  /**
+   * Open one window and say so. The palette's chips call it, and so does anything holding
+   * the imperative handle below.
+   *
+   * @param {{name: string, window: object}} item
+   * @returns {string | null} the new window's id, or `null` when there was no room
+   */
+  const openWindow = useCallback((item) => {
+    const id = apiRef.current?.addFromTemplate(item.window) ?? null
     setAnnouncement(id ? `${item.name} added.` : `No room for ${item.name}.`)
+    return id
   }, [])
+
+  /**
+   * The one thing a caller may do to this desktop from outside (ANV-36).
+   *
+   * `/research`'s securities list opens a chart for the security the user picked, and only
+   * `BinPackingLayout` knows where a window fits — so the answer is handed up
+   * imperatively rather than the grid being published downward (ANV-35's rule). What is
+   * *not* forwarded is `BinPackingLayout`'s handle itself: `addWindow`/`removeWindow`/
+   * `replaceWindows` would let a caller write the arrangement behind this component's
+   * back, and `addFromTemplate` alone would move the announcement out of the one place
+   * that owns it. A page that adds a window silently is a page where a screen-reader user
+   * cannot tell a full grid from a broken button.
+   */
+  useImperativeHandle(ref, () => ({ openWindow }), [openWindow])
 
   return (
     <div className="flex h-full w-full flex-col" data-testid="interactive-desktop">
       <div className="overflow-x-auto rounded-lg border border-neutral-500 bg-white/50 p-2 backdrop-blur dark:bg-neutral-900/50">
-        <WindowMenu items={items} label="Add a window:" onAdd={handleAdd} />
+        <WindowMenu items={items} label="Add a window:" onAdd={openWindow} />
       </div>
 
       <div className="flex-1">
@@ -176,4 +224,6 @@ export default function InteractiveDesktop({ items = PUBLIC_WIDGET_PALETTE, useC
       </p>
     </div>
   )
-}
+})
+
+export default InteractiveDesktop
