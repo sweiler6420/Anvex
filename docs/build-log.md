@@ -62,8 +62,9 @@ modified. What each contributes to Anvex:
 | ANV-10 | Security utilities and pure token domain | **Done** |
 | ANV-11 | Auth service, dependencies and routes | **Done** |
 | ANV-42 | Drop passlib, hash with bcrypt directly | **Done** *(inserted — Stephen's call)* |
-| ANV-12 | Users service and routes | Next |
-| ANV-13 … ANV-41 | see `backlog.md` | Not started |
+| ANV-12 | Users service and routes | **Done** — *E3 Auth complete* |
+| ANV-13 | Stocks service and routes | Next |
+| ANV-14 … ANV-41 | see `backlog.md` | Not started |
 
 ### ANV-1 — Done
 Commits `0ccc0df`, `9ae4224` on `main`.
@@ -589,3 +590,52 @@ bcrypt 4.0.1 installed in a throwaway `uv run --no-project` environment rejected
 generated a genuine hash from that exact removed stack and used that instead, recording how in a
 comment. **Lesson: never hand an agent a synthetic fixture presented as real output** — write the
 instruction to generate it, or generate it first and paste verified output.
+
+### ANV-12 — Done · **E3 Auth complete**
+Commit `fb29f39`, 11 files, ~74 new tests. **Verified independently:** `715 passed / 5 skipped`
+with `db-test` up, `520 passed / 200 skipped` with it stopped, ruff clean, `/me` correctly declared
+before `/{user_id}`, and the cross-account refusal confirmed to happen *before* any query.
+
+**Routes:** `POST /v1/users` (201, public), `GET /v1/users/me`, `GET /v1/users/{user_id}`.
+`/me` must stay declared first or Starlette tries to parse `"me"` as a UUID.
+
+**Decision: `GET /v1/users/{user_id}` is self-only, and another user's id answers 404 — not 403.**
+Registration is self-service, so "any authenticated caller" is "anybody at all"; the old behaviour
+made every account's email readable by a stranger who spent thirty seconds signing up. Anvex has no
+directory, no social graph and no admin role, so nothing needs the capability. 403 was rejected
+because it *confirms the account is real*, which is the half of the information worth protecting —
+the refusal is raised without querying, so timing is silent too.
+
+**`PasswordTooLongError` → `ValidationError`** is translated in `UserService._hash`, the only place
+it can be. The test first proves the fixture is not theatre: `"漢" * 25` is 25 characters (inside
+ANV-8's 72-*character* cap, so `UserCreate` accepts it) and 75 *bytes* (outside bcrypt's limit). The
+API test asserts **422, not 500** — 500 is the failure mode without the translation.
+
+`securitySchemes` now appears in the OpenAPI document and provably did not before — verified by
+building an app with ANV-11's route set (`None`) and with ANV-12's (`OAuth2PasswordBearer`).
+ANV-11's probe route was mounted by a test fixture, so it never reached the document.
+
+**Carried into ANV-13 onward:**
+1. **The refusal shape for owned resources** — "not yours" is a 404 identical to "does not exist",
+   raised *before* any query. **ANV-15's watchlists need exactly this**; a `ForbiddenError` there
+   would confirm which watchlist ids are real.
+2. **Pre-check for the message, constraint for the correctness.** Keep the `*_exists` call so the
+   409 can name `details.field`, *and* catch the `IntegrityError` — with
+   `await session.rollback()` **first**, because Postgres aborts the transaction and refuses
+   everything after it — then map the `uq_<table>_<column>` name to the same `ConflictError` and
+   re-raise anything unrecognised. ANV-13's `StockRepo.delete` RESTRICT case is the same pattern.
+3. **Assert constraint-name mapping in `tests/integration/`.** A hand-built `IntegrityError` only
+   tests itself. `test_services_user.py` blinds the pre-checks with a `BlindUserRepo` — the real
+   repo and real SQL, with only the two "is it taken" lookups forced to answer "free" — which is
+   exactly the state a race loser is in.
+4. **Translate `app/utils/` exceptions at the service.** Utils raise builtins by layering rule;
+   uncaught they become 500s for input the API should have refused.
+5. Shared fakes grew: `StubSession` now counts `commits`/`rollbacks`, so "the service owns the
+   transaction" is a unit assertion. `FakeUserRepo` gained `email_exists`, `username_exists`,
+   `create`, and a one-shot `create_error`.
+6. API tests can override **two service factories onto one shared fake repo**, which is what made
+   register → login → `/me` testable end to end with no database.
+
+**Process note:** the agent amended its own commit after noticing it had written test counts before
+counting them, and flagged it against the ANV-42 lesson. The corrected figures match an independent
+count.
