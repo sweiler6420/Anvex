@@ -86,10 +86,11 @@ modified. What each contributes to Anvex:
 | ANV-27 | TanStack Router and route guards | **Done** |
 | ANV-28 | Layout, header and dark-mode switcher | **Done** — *frontend foundation complete* |
 | ANV-29 | Login page | **Done** |
-| ANV-30 | Sign-up page | Next |
-| ANV-31 … ANV-41 | see `backlog.md` | Not started |
+| ANV-30 | Sign-up page | **Done** |
+| ANV-31 | Recovery and Unauthorized pages | Next |
+| ANV-32 … ANV-41 | see `backlog.md` | Not started |
 
-**277 frontend tests** passing in-container, lint clean. Backend: 2,811. **Total: 3,088.**
+**316 frontend tests** passing in-container, lint clean. Backend: 2,811. **Total: 3,127.**
 
 **2,811 tests** passing with the full stack up (2,497 with Docker stopped — DB, S3 and broker tiers
 skip), 99% coverage. `ruff check` and `ruff format --check` clean across 176 files.
@@ -302,6 +303,27 @@ on success — the guard is already unmounting the page.
 - **Test trap:** `createBrowserHistory` *overwrites* an entry's whole state at startup when it finds
   neither `key` nor `__TSR_key` on it, so a hand-made `window.history.replaceState` fixture must
   include them. A real `navigate({state})` already does; this only bites test rigs.
+
+**For ANV-31 (recovery + unauthorized):**
+- **`requestRecovery({username})` and `RECOVERY_PATH` already exist and are tested** in
+  `features/auth/api.js` — do not write a second one. `register()` is beside it; note it is JSON,
+  unlike login's form encoding.
+- **Recovery must NOT copy ANV-30's navigation exception.** That exception is narrow: sign-up
+  creates no session, so no guard could own the transition. Recovery has nowhere to go — it stays
+  put and shows the 202 message.
+- **There is nothing to branch on.** `POST /v1/auth/recovery` returns **202 with a fixed body for
+  every username**, existing or not (§4's anti-enumeration rule — the old `/v1/recovery` answered
+  404 with the username echoed back). The page must render the same thing every time and infer
+  nothing. **A test should assert the unknown-account and known-account responses produce
+  byte-identical UI.**
+- Recovery has no 409, so everything is the banner — there is no `conflictedField` analogue.
+- **`/unauthorized` is ticketed ANV-32, not ANV-31** (`routes/unauthorized.jsx` says `ticket="ANV-32"`).
+  Testids: `route-recovery`, `route-unauthorized`.
+
+**Open backend gap found by ANV-30 (needs its own ticket):** the API enforces password **length**
+(7–72) and **nothing else**. `app/schemas/user.py` says strength "belongs in `app/domain/`" and **no
+such rule was ever written**. The four client-side rules are therefore not a mirror of a server rule
+— they are the only place the policy exists, and a non-browser client can register with `aaaaaaa`.
 
 **API contract facts the UI must respect:**
 - **Prices are quoted JSON strings**, not numbers — `"1234.5678"`. That is what preserves the fourth

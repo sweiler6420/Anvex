@@ -1432,3 +1432,59 @@ to disk for tab restore, so a password handed from sign-up to login through rout
 **outlive the tab**. ANV-30 hands off the username only.
 
 11 mutations run. It also corrected a now-false line in `login.jsx`'s docstring left by ANV-27.
+
+### ANV-30 — Done
+Commit `4ffd03f`, 39 new tests (277 → **316**). **Verified independently:** 316 pass, lint clean.
+
+**The orchestrator's ticket had the bug backwards, and the agent proved it by reading the library.**
+The ticket claimed `minSybols` was a typo that silently disabled the symbol rule. **Verified against
+`validator/lib/isStrongPassword.js`:** `defaultOptions` contains **both** `minLowercase: 1` and
+`minSymbols: 1`, and line 92 is `options = merge(options, defaultOptions)` — so any key the caller
+*omits* gets the default. Both misspellings were simply ignored keys.
+
+So **the symbol rule always applied.** The real defect is the opposite: the misspelt `minLowerCase`
+let the default `minLowercase: 1` enforce a **lowercase requirement the tooltip never mentioned**.
+`PASSWORD1!` satisfies all four advertised rules and was still rejected — with only "Password Must
+Obey Rules" beside a tooltip that gave no hint why. That now has its own test.
+
+Two narrower promises were also broken by the library's own definitions: `upperCaseRegex` is
+`/^[A-Z]$/` and `symbolRegex` is fixed ASCII punctuation, so `ÄÖÜÑÇÉ1€` had neither an uppercase
+letter nor a symbol as far as the check was concerned. The new predicates are Unicode.
+
+**`validator` was not added as a dependency**, and the reason is not size: `isStrongPassword` merges
+the caller's options over its defaults **without validating a single key**, which is exactly how a
+policy silently stops matching its own documentation. Four predicates in a `PASSWORD_RULES` array
+give per-rule messages (the old page could only ever say "Password Must Obey Rules"), make a
+misspelling a `ReferenceError`, and let the rendered list and the check be generated from one
+object — proven by mutation 1, which fails **4** tests covering display *and* enforcement together.
+`isEmail` went for the opposite reason: the server's `EmailStr` is the authority, so the client
+check is deliberately loose — a stricter local regex refuses addresses the account could have had,
+with no recourse.
+
+**The tooltip is gone and the rules are permanently visible**, joined to the input by
+`aria-describedby`. Three reasons: hover is not an interaction a keyboard or touch user has; the old
+tooltip was duplicated per theme; and it lived **inside the `passwordError !== ""` branch**, so the
+rules existed only *after* a rejection — invisible exactly while the user was choosing a password. A
+disclosure was rejected (it trades a hover nobody can perform for a click everybody must). The
+description is static, not a live tick-list, because a description that rewrites itself per
+keystroke is re-announced unpredictably.
+
+**Two more of its own tests could not discriminate, both found and fixed.**
+`ÄNDERUNG1€` contains ASCII capitals, so the "non-ASCII uppercase" test **passed the mutation with
+all 38 green**; changed to `ÄÖÜÑÇÉ1€`. And the "username equals email" test used an already-lowercase
+address, so it survived dropping `.toLowerCase()`. **Fifth ticket to self-report a
+non-discriminating test.** It also reported a gap rather than faking it: no `request_cancelled` test,
+because `register` is imported directly and MSW cannot make axios raise `ERR_CANCELED` — mocking the
+module would remove the transport from every 409 test in the file.
+
+**Other defects fixed, each with a test:** the password was **visible by default**
+(`useState(true)`); no `htmlFor`/`id` anywhere; the toggle was `onClick` on an `aria-hidden` `<svg>`;
+a `useEffect` **wiped all three fields** whenever the global error changed, so one taken username
+discarded the address and password too; navigation was a `<p onClick>`; and the
+"username cannot be your email" rule compared the *raw* username against the *raw* email while
+sending the lowercased one, so `ADA@example.COM` sailed through. No `maxLength` on a form that
+*creates* a value — silent paste truncation would create an account with a password the user does
+not have.
+
+15 mutations run, including ANV-29's signature result reproduced: the `<div role="button">` shim
+fails **exactly one** test, the keyboard one.
