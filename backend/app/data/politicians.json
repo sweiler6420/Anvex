@@ -1,0 +1,546 @@
+{
+  "provenance": "SYNTHETIC. Generated for Anvex ticket ANV-16 as a development seed fixture. Every person here is invented: the names, the roster ids, the dates of birth and the party affiliations were produced by a seeded random generator, not copied or derived from any real roster, register or public record. The shape is modelled on the US Congress rosters this table is meant to hold one day - two senators per state, a handful of representatives, ids shaped like a Bioguide identifier (surname initial plus six digits) - but the identifiers are not Bioguide identifiers and resolve to nobody. Any resemblance to a living official is coincidence. Replace this file wholesale when a real, attributed roster is licensed; do not append real people to it.",
+  "generated": "2026-08-29",
+  "rows": [
+    {
+      "politician_id": "A377489",
+      "state": "CA",
+      "chamber": "House",
+      "dob": "1980-12-05",
+      "first_name": "Ramona",
+      "last_name": "Ainsworth",
+      "gender": "F",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "A192979",
+      "state": "TX",
+      "chamber": "House",
+      "dob": "1961-05-28",
+      "first_name": "Jeremiah",
+      "last_name": "Ashcombe",
+      "gender": "F",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "A598205",
+      "state": "TX",
+      "chamber": "Senate",
+      "dob": "1964-08-08",
+      "first_name": "Cordelia",
+      "last_name": "Ashgrove",
+      "gender": "M",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "B658960",
+      "state": "PA",
+      "chamber": "Senate",
+      "dob": "1958-08-04",
+      "first_name": "Dorotheo",
+      "last_name": "Bellweather",
+      "gender": "F",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "B712743",
+      "state": "FL",
+      "chamber": "Senate",
+      "dob": "1960-03-15",
+      "first_name": "Gwendolyn",
+      "last_name": "Blackwater",
+      "gender": "F",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "B496598",
+      "state": "MA",
+      "chamber": "House",
+      "dob": "1973-11-19",
+      "first_name": "Marguerite",
+      "last_name": "Braddock",
+      "gender": "F",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "C583621",
+      "state": "VT",
+      "chamber": "Senate",
+      "dob": "1961-10-25",
+      "first_name": "Zachariah",
+      "last_name": "Caldermill",
+      "gender": "M",
+      "party": "Independent"
+    },
+    {
+      "politician_id": "C073903",
+      "state": "GA",
+      "chamber": "Senate",
+      "dob": "1962-03-28",
+      "first_name": "Delphine",
+      "last_name": "Chilcott",
+      "gender": "M",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "C242405",
+      "state": "CA",
+      "chamber": "House",
+      "dob": null,
+      "first_name": "Solomon",
+      "last_name": "Cranmoor",
+      "gender": "M",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "D013081",
+      "state": "TX",
+      "chamber": "House",
+      "dob": "1991-12-02",
+      "first_name": "Bartholomew",
+      "last_name": "Danforth",
+      "gender": null,
+      "party": "Republican"
+    },
+    {
+      "politician_id": "D777391",
+      "state": "MA",
+      "chamber": "Senate",
+      "dob": "1963-06-23",
+      "first_name": "Florentine",
+      "last_name": "Delacroix",
+      "gender": "F",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "D168276",
+      "state": "CA",
+      "chamber": "House",
+      "dob": "1961-09-12",
+      "first_name": "Eleanora",
+      "last_name": "Drummond",
+      "gender": "M",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "E668041",
+      "state": "CA",
+      "chamber": "Senate",
+      "dob": "1948-09-14",
+      "first_name": "Nerissa",
+      "last_name": "Eastwick",
+      "gender": "M",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "E012645",
+      "state": "FL",
+      "chamber": "House",
+      "dob": "1960-06-22",
+      "first_name": "Tabitha",
+      "last_name": "Ellsworth",
+      "gender": "F",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "E443847",
+      "state": "PA",
+      "chamber": "House",
+      "dob": "1982-09-27",
+      "first_name": "Wendell",
+      "last_name": "Elverson",
+      "gender": "F",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "F467311",
+      "state": "CA",
+      "chamber": "House",
+      "dob": "1962-04-03",
+      "first_name": "Verity",
+      "last_name": "Fairbank",
+      "gender": "F",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "F827911",
+      "state": "NY",
+      "chamber": "Senate",
+      "dob": "1966-11-11",
+      "first_name": "Hollis",
+      "last_name": "Fanshawe",
+      "gender": "F",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "F027766",
+      "state": "GA",
+      "chamber": "House",
+      "dob": "1982-05-28",
+      "first_name": "Beatrix",
+      "last_name": "Fenwicke",
+      "gender": "F",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "G965554",
+      "state": "VT",
+      "chamber": "House",
+      "dob": "1977-06-20",
+      "first_name": "Winifred",
+      "last_name": "Gainsborough",
+      "gender": "M",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "G219430",
+      "state": "TX",
+      "chamber": "Senate",
+      "dob": "1975-04-16",
+      "first_name": "Desmond",
+      "last_name": "Galbraith",
+      "gender": "M",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "H061939",
+      "state": "TX",
+      "chamber": "House",
+      "dob": "1988-06-22",
+      "first_name": "Barnaby",
+      "last_name": "Hallowell",
+      "gender": "M",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "H920936",
+      "state": "FL",
+      "chamber": "House",
+      "dob": "1989-08-18",
+      "first_name": "Ursula",
+      "last_name": "Harkness",
+      "gender": "F",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "I487613",
+      "state": "WA",
+      "chamber": "House",
+      "dob": "1975-08-05",
+      "first_name": "Lavinia",
+      "last_name": "Inglewood",
+      "gender": "F",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "I651629",
+      "state": "WA",
+      "chamber": "House",
+      "dob": "1966-09-01",
+      "first_name": "Rosalind",
+      "last_name": "Ironside",
+      "gender": "M",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "J079468",
+      "state": "UT",
+      "chamber": "Senate",
+      "dob": "1978-02-22",
+      "first_name": "Ulysses",
+      "last_name": "Jarrow",
+      "gender": "F",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "J758679",
+      "state": "OH",
+      "chamber": "Senate",
+      "dob": "1972-10-07",
+      "first_name": "Evangeline",
+      "last_name": "Jessup",
+      "gender": "F",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "K598267",
+      "state": "NY",
+      "chamber": "House",
+      "dob": "1962-06-24",
+      "first_name": "Clementine",
+      "last_name": "Kesselring",
+      "gender": "M",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "K109179",
+      "state": "PA",
+      "chamber": "Senate",
+      "dob": "1972-03-23",
+      "first_name": "Isadora",
+      "last_name": "Kirkbride",
+      "gender": "F",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "L789166",
+      "state": "TX",
+      "chamber": "House",
+      "dob": "1987-04-12",
+      "first_name": "Cassius",
+      "last_name": "Larkspur",
+      "gender": "F",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "L738153",
+      "state": "PA",
+      "chamber": "House",
+      "dob": "1977-02-11",
+      "first_name": "Xiomara",
+      "last_name": "Lockhart",
+      "gender": "M",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "M386293",
+      "state": "FL",
+      "chamber": "Senate",
+      "dob": "1945-12-26",
+      "first_name": "Quenton",
+      "last_name": "Marchetti",
+      "gender": "F",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "M768069",
+      "state": null,
+      "chamber": null,
+      "dob": "1961-04-17",
+      "first_name": "Octavian",
+      "last_name": "Mordaunt",
+      "gender": "M",
+      "party": "Independent"
+    },
+    {
+      "politician_id": "N595564",
+      "state": "NY",
+      "chamber": "House",
+      "dob": "1988-08-09",
+      "first_name": "Imogen",
+      "last_name": "Nettleship",
+      "gender": "F",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "N678327",
+      "state": "AZ",
+      "chamber": "Senate",
+      "dob": "1954-05-07",
+      "first_name": "Fitzgerald",
+      "last_name": "Northcott",
+      "gender": "M",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "O503324",
+      "state": "OH",
+      "chamber": "House",
+      "dob": "1975-01-05",
+      "first_name": "Yolanda",
+      "last_name": "Oakhurst",
+      "gender": "F",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "O970008",
+      "state": "WA",
+      "chamber": "Senate",
+      "dob": "1946-08-03",
+      "first_name": "Sylvester",
+      "last_name": "Osgood",
+      "gender": "M",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "P149451",
+      "state": "OH",
+      "chamber": "House",
+      "dob": "1954-06-08",
+      "first_name": "Ferdinand",
+      "last_name": "Pemberton",
+      "gender": "F",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "P571450",
+      "state": "NY",
+      "chamber": "House",
+      "dob": "1981-08-15",
+      "first_name": "Jethro",
+      "last_name": "Pyrmont",
+      "gender": "F",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "Q635561",
+      "state": "GA",
+      "chamber": "Senate",
+      "dob": "1977-10-18",
+      "first_name": "Percival",
+      "last_name": "Quillon",
+      "gender": "M",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "Q250386",
+      "state": "MA",
+      "chamber": "Senate",
+      "dob": "1949-12-02",
+      "first_name": "Griselda",
+      "last_name": "Quimby",
+      "gender": "F",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "R915323",
+      "state": "CA",
+      "chamber": "Senate",
+      "dob": "1945-05-20",
+      "first_name": "Anselm",
+      "last_name": "Ravensworth",
+      "gender": "M",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "R871763",
+      "state": "AZ",
+      "chamber": "House",
+      "dob": "1984-06-16",
+      "first_name": "Ottilie",
+      "last_name": "Rutherglen",
+      "gender": "M",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "S498961",
+      "state": "GA",
+      "chamber": "House",
+      "dob": "1955-05-04",
+      "first_name": "Horatio",
+      "last_name": "Sedgewick",
+      "gender": "M",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "S055556",
+      "state": "WA",
+      "chamber": "Senate",
+      "dob": "1959-06-19",
+      "first_name": "Virgil",
+      "last_name": "Stanfield",
+      "gender": "F",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "T210745",
+      "state": "AZ",
+      "chamber": "House",
+      "dob": "1972-05-03",
+      "first_name": "Leopold",
+      "last_name": "Tarrington",
+      "gender": "F",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "T495906",
+      "state": "UT",
+      "chamber": "Senate",
+      "dob": "1960-07-20",
+      "first_name": "Hieronymus",
+      "last_name": "Thornbury",
+      "gender": "M",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "U482018",
+      "state": "FL",
+      "chamber": "House",
+      "dob": "1974-11-25",
+      "first_name": "Philomena",
+      "last_name": "Ulverston",
+      "gender": "M",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "U888342",
+      "state": "MA",
+      "chamber": "House",
+      "dob": "1990-01-06",
+      "first_name": "Georgiana",
+      "last_name": "Underhill",
+      "gender": "M",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "V348331",
+      "state": "AZ",
+      "chamber": "Senate",
+      "dob": "1972-01-07",
+      "first_name": "Nathaniel",
+      "last_name": "Vandermeer",
+      "gender": "M",
+      "party": "Independent"
+    },
+    {
+      "politician_id": "V753432",
+      "state": "UT",
+      "chamber": "House",
+      "dob": "1963-02-25",
+      "first_name": "Theodora",
+      "last_name": "Voorhees",
+      "gender": "M",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "W752173",
+      "state": "PA",
+      "chamber": "House",
+      "dob": "1985-11-21",
+      "first_name": "Montgomery",
+      "last_name": "Westbrook",
+      "gender": "M",
+      "party": "Republican"
+    },
+    {
+      "politician_id": "W388962",
+      "state": "NY",
+      "chamber": "Senate",
+      "dob": "1953-12-06",
+      "first_name": "Katarina",
+      "last_name": "Whitcombe",
+      "gender": "F",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "Y827053",
+      "state": "VT",
+      "chamber": "Senate",
+      "dob": "1962-10-18",
+      "first_name": "Emmerich",
+      "last_name": "Yarborough",
+      "gender": "M",
+      "party": "Democrat"
+    },
+    {
+      "politician_id": "Y761751",
+      "state": "OH",
+      "chamber": "Senate",
+      "dob": "1957-09-06",
+      "first_name": "Adelaide",
+      "last_name": "Yeardley",
+      "gender": "M",
+      "party": "Republican"
+    }
+  ]
+}

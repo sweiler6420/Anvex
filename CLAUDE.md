@@ -96,6 +96,33 @@ Checked-in reference data (JSON/CSV) and the loaders that read it: politician ro
 lists, ticker seeds. No network calls, no DB writes — loaders return parsed structures for a
 service or a job to persist.
 
+- **A data file is an envelope, not a bare array**: a JSON object with a required
+  `provenance` string and a `rows` list. `app/data/loader.py` refuses a file whose
+  `provenance` is missing or blank, which is the point — reference data is the one thing in
+  the repo somebody will later mistake for *sourced* data, and the only reliable defence is
+  making an unattributed file impossible to load. A synthetic fixture says so there (and a
+  test asserts it still does); a licensed dataset names its licence there. Extra keys
+  (`generated`, a version) are ignored, so a file can carry metadata without a schema change.
+- **Rows are validated against the resource's `XCreate` schema on the way out**, so a loader
+  returns `list[Model]` and a malformed file fails at *load* — naming the file, the row index
+  and the field — rather than as an `IntegrityError` halfway through a bulk insert with half
+  the batch already written. The first bad row stops the load; a partially valid dataset is
+  not a dataset.
+- **Failures are `SeedDataError`, a plain `ValueError`, and are deliberately not translated.**
+  This layer has no Anvex error vocabulary and does not import `app/domain/errors.py`: a broken
+  checked-in file is a repository defect, not a request, and the seed path is reached from a
+  script or a job — never a route — so there is no status code for it to become. The script
+  exits non-zero. (Contrast `app/utils/`, whose builtins *are* translated by the calling
+  service, because those describe input a user supplied.)
+- **Persisting is the service's job, and dedupe happens before the write.** A loader parses;
+  a service validates ordering/uniqueness rules in `app/domain/`, upserts and commits. A seed
+  is idempotent twice over and the halves are different mechanisms: `INSERT … ON CONFLICT DO
+  UPDATE` on a real key makes a *second run* safe, and deduplicating the batch in `app/domain/`
+  makes a *single run* safe (Postgres rejects a statement whose conflict target is hit twice).
+  Neither substitutes for the other. `backend/scripts/seed_<resource>.py` is then a thin entry
+  point — resolve, call one service method, report — with distinct exit codes for "the file is
+  unusable" and "the database refused".
+
 ### `app/db/` — connection plumbing
 Async engine, `async_sessionmaker`, declarative `Base`, session lifecycle, and the Alembic
 `migrations/` tree. Nothing here knows what a Stock is.
@@ -424,7 +451,13 @@ authorization is not data access.
   and have both import it downward; leave a re-export behind in the original module (`__all__` keeps
   it honest) so the established import path and its tests keep working, and assert in a test that
   the re-export **is** the same object rather than a copy. ANV-14 did this to ANV-13's
-  `normalise_ticker`.
+  `normalise_ticker`. **The rule applies a second time *inside* `app/domain/`**: a rule living in
+  `app/domain/<aggregate>.py` that acquires callers from other aggregates belongs in an
+  aggregate-neutral module, because a rule three aggregates share belongs to none of them and the
+  alternative is two domain modules importing each other. ANV-16 moved `resolve_window` (with
+  `PageWindow` and `MIN_OFFSET`) from `app/domain/stock_data.py` to `app/domain/pagination.py` on
+  its third caller, leaving the re-export behind. Trigger on the *second* caller, move on a
+  cross-aggregate one.
 - **Normalising an identifier is the service's job, not the request schema's.** An annotated type's
   `BeforeValidator` (ANV-8's `Ticker`) does apply to a **path** parameter as well as a body — that
   was verified, not assumed — but it only ever covers callers that arrive over HTTP. A rule that a

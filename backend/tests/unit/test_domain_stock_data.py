@@ -73,10 +73,14 @@ class TestPurity:
         assert "starlette" not in roots
         assert "sqlalchemy" not in roots
         assert "app.settings" not in modules
-        # Downward-only: the error hierarchy and the pagination bounds, nothing that does I/O.
+        # Downward-only: the error hierarchy and the paging rule, nothing that does I/O.
+        # ``app.domain.pagination`` replaced ``app.schemas.pagination`` here in ANV-16, when
+        # ``resolve_window`` gained a third caller and moved to its own aggregate-neutral
+        # module. The bounds are still the schema's, one hop further down; the re-export is
+        # covered by ``tests/unit/test_domain_pagination.py``.
         assert {module for module in modules if module.startswith("app")} == {
             "app.domain.errors",
-            "app.schemas.pagination",
+            "app.domain.pagination",
         }
 
     def test_it_never_reads_a_clock(self) -> None:

@@ -27,6 +27,16 @@ response is already bounded by :data:`~app.schemas.pagination.MAX_PAGE_LIMIT`, s
 range costs a wider ``COUNT`` and nothing else; the row count a client can pull is governed
 by paging, which is the layer that should govern it.
 
+**The paging half of this module has moved.** :data:`~app.domain.pagination.MIN_OFFSET`,
+:class:`~app.domain.pagination.PageWindow` and :func:`~app.domain.pagination.resolve_window`
+were written here when candles were their only caller. ANV-15 gave ``resolve_window`` a
+second caller and ANV-16 a third, so ``CLAUDE.md`` §4's "a pure rule with a second caller
+moves down" applies and the three names now live in the aggregate-neutral
+:mod:`app.domain.pagination`. They are re-exported below, so
+``from app.domain.stock_data import resolve_window`` still resolves — to the *same* objects,
+which a test asserts rather than assumes. What stays here is what is genuinely about
+candles: the date range, and the combined query that pairs it with a window.
+
 **There is deliberately no clock.** Nothing here needs one. The tempting rule — "a range
 entirely in the future is empty, so skip the query" — would need to compare the caller's
 dates against the *exchange's* local date, and Anvex has no exchange-to-timezone map yet
@@ -43,11 +53,11 @@ from dataclasses import dataclass
 from typing import Final
 
 from app.domain.errors import ValidationError
-from app.schemas.pagination import resolve_page_limit
 
-#: The smallest offset that means anything. A negative one is not a smaller page, it is a
-#: nonsense request; see :func:`resolve_window` for why it is clamped rather than refused.
-MIN_OFFSET: Final[int] = 0
+# Re-exported below rather than redefined: ANV-14 wrote these here, and ANV-16 moved them
+# down to a neutral home once `resolve_window` had a third caller. The import path this
+# module established keeps working, and keeps pointing at the one implementation.
+from app.domain.pagination import MIN_OFFSET, PageWindow, resolve_window
 
 #: ``details["field"]`` on the one error this module raises. The start bound is named
 #: because it is the one the caller most likely mistyped — both dates are in ``details``
@@ -134,19 +144,6 @@ class DateRange:
 
 
 @dataclass(frozen=True, slots=True)
-class PageWindow:
-    """A resolved ``limit``/``offset`` pair: exactly what the repo is about to be asked for.
-
-    Both numbers are already safe to hand to Postgres *and* to
-    :class:`~app.schemas.pagination.Page`, which is the point — a service should never carry
-    a "maybe resolved" limit around.
-    """
-
-    limit: int
-    offset: int
-
-
-@dataclass(frozen=True, slots=True)
 class CandleQuery:
     """A whole validated request for candles: which dates, and which window of them."""
 
@@ -172,26 +169,6 @@ def resolve_date_range(*, start: dt.date | None = None, end: dt.date | None = No
             details={"start": start.isoformat(), "end": end.isoformat()},
         )
     return DateRange(start=start, end=end)
-
-
-def resolve_window(*, limit: int | None = None, offset: int | None = None) -> PageWindow:
-    """The window to actually query for a caller that asked for ``limit``/``offset``.
-
-    ``limit`` is delegated to :func:`~app.schemas.pagination.resolve_page_limit` rather than
-    re-derived, so the bounds live beside the :class:`~app.schemas.pagination.Page` that
-    enforces them and there is one answer to "how big is a page".
-
-    ``offset`` is **clamped** to :data:`MIN_OFFSET` rather than refused, for the same reason
-    the limit is clamped rather than refused (``CLAUDE.md`` §4): the HTTP edge already
-    rejects a negative offset with a 422 via ``Query(ge=0)``, so an HTTP client is never
-    quietly moved somewhere it did not ask to be — while a job or a script that computed
-    ``offset = page * size - size`` into a negative gets the first page instead of a
-    ``SQL`` error nobody will read.
-    """
-    return PageWindow(
-        limit=resolve_page_limit(limit),
-        offset=MIN_OFFSET if offset is None else max(MIN_OFFSET, offset),
-    )
 
 
 def resolve_candle_query(

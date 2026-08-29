@@ -10,8 +10,8 @@ Also home to the fakes that let a layer be tested without the layer below it:
 Postgres" is what a ``tests/api/`` test does whenever the route it is contract-testing
 happens to take a session; and the ``FakeXRepo`` / ``make_x`` pairs
 (:class:`FakeUserRepo`, :class:`FakeStockRepo`, :class:`FakeStockDataRepo`,
-:class:`FakeWatchlistRepo`), because a service's own logic is worth testing at unit speed
-against an in-memory repo rather than only through a database.
+:class:`FakeWatchlistRepo`, :class:`FakePoliticianRepo`), because a service's own logic is
+worth testing at unit speed against an in-memory repo rather than only through a database.
 
 **The fakes live here, together.** Each new resource adds its pair beside the existing ones
 rather than starting a module-local set, so an API test can build one object graph shared
@@ -32,7 +32,7 @@ from fastapi import FastAPI
 from httpx import Response
 
 from app.deps.session import get_session
-from app.models import Stock, StockData, User, Watchlist, WatchlistData
+from app.models import Politician, Stock, StockData, User, Watchlist, WatchlistData
 from app.models.watchlist import DEFAULT_TITLE
 
 #: Every key ``app.schemas.errors.ErrorResponse`` promises, always present.
@@ -541,6 +541,155 @@ class FakeWatchlistRepo:
         )
 
 
+class FakePoliticianRepo:
+    """An in-memory stand-in for :class:`app.repos.politician.PoliticianRepo`.
+
+    Same idea and the same discipline as :class:`FakeStockRepo`: it re-implements the
+    *behaviour* of the real queries rather than pretending to be them, and it implements only
+    the three methods :class:`app.services.politician.PoliticianService` actually calls.
+
+    Four behaviours are load-bearing and deliberately faithful — a forgiving fake would
+    silently pass the very bugs these tests exist to catch:
+
+    * :meth:`list_politicians` matches **exactly and case-sensitively** on all three filters,
+      because the real query does (``Politician.state == state``). A fake that folded case
+      would pass a service that had forgotten to normalise, which is the single most likely
+      defect in this resource.
+    * ``total`` is counted **before** the window, exactly as ``BaseRepo._page`` does, so an
+      ``offset`` past the end is ``([], total)`` and not ``([], 0)``.
+    * rows come back ordered by ``(last_name, first_name, politician_id)`` — the real
+      ``ORDER BY``, whose third key is what makes a page boundary between two identically
+      named legislators stable.
+    * :meth:`bulk_upsert` **raises on an internal duplicate**, the way Postgres does
+      (``ON CONFLICT DO UPDATE command cannot affect row a second time``), rather than
+      quietly keeping the last one. That is the whole reason
+      :func:`app.domain.politician.dedupe_politicians` exists, so a fake that tolerated it
+      would delete the test's subject.
+
+    ``calls`` records ``(method, argument)`` in order, so a test can assert *what the service
+    asked the repo for* — which is how filter normalisation gets pinned at the boundary
+    rather than only at the result.
+    """
+
+    #: The message Postgres actually raises for a batch that hits one conflict target twice.
+    DUPLICATE_MESSAGE = "ON CONFLICT DO UPDATE command cannot affect row a second time"
+
+    def __init__(self, *politicians: Politician) -> None:
+        self.politicians: list[Politician] = list(politicians)
+        self.calls: list[tuple[str, Any]] = []
+        #: Raised (once, then cleared) by the next :meth:`bulk_upsert`, for the failures no
+        #: pre-check can close.
+        self.bulk_upsert_error: Exception | None = None
+
+    def add(self, politician: Politician) -> Politician:
+        self.politicians.append(politician)
+        return politician
+
+    async def get_by_id(self, session: Any, politician_id: str) -> Politician | None:
+        """Exact match, casing included — see the class docstring."""
+        self.calls.append(("get_by_id", politician_id))
+        return next((row for row in self.politicians if row.politician_id == politician_id), None)
+
+    async def list_politicians(
+        self,
+        session: Any,
+        *,
+        state: str | None = None,
+        party: str | None = None,
+        chamber: str | None = None,
+        limit: int,
+        offset: int = 0,
+    ) -> tuple[list[Politician], int]:
+        self.calls.append(
+            (
+                "list_politicians",
+                {
+                    "state": state,
+                    "party": party,
+                    "chamber": chamber,
+                    "limit": limit,
+                    "offset": offset,
+                },
+            )
+        )
+        matched = [
+            row
+            for row in self.politicians
+            if (state is None or row.state == state)
+            and (party is None or row.party == party)
+            and (chamber is None or row.chamber == chamber)
+        ]
+        matched.sort(key=lambda row: (row.last_name, row.first_name, row.politician_id))
+        # `total` counts every match and is taken *before* the window is applied.
+        return matched[offset : offset + limit], len(matched)
+
+    async def bulk_upsert(self, session: Any, rows: Any) -> int:
+        """Insert or refresh a batch keyed on ``politician_id``, and count what it touched.
+
+        Refuses a batch with an internal duplicate, as Postgres does; returns ``0`` without
+        doing anything for an empty batch, as the real one does (an empty ``VALUES`` list is
+        a syntax error, so it issues no SQL at all).
+        """
+        values = [dict(row) for row in rows]
+        self.calls.append(("bulk_upsert", values))
+        if self.bulk_upsert_error is not None:
+            error, self.bulk_upsert_error = self.bulk_upsert_error, None
+            raise error
+        if not values:
+            return 0
+
+        identifiers = [row["politician_id"] for row in values]
+        if len(set(identifiers)) != len(identifiers):
+            raise RuntimeError(self.DUPLICATE_MESSAGE)
+
+        for row in values:
+            existing = next(
+                (
+                    candidate
+                    for candidate in self.politicians
+                    if candidate.politician_id == row["politician_id"]
+                ),
+                None,
+            )
+            if existing is None:
+                self.politicians.append(Politician(**row))
+            else:
+                for column, value in row.items():
+                    setattr(existing, column, value)
+        return len(values)
+
+
+def make_politician(
+    *,
+    politician_id: str = "A000001",
+    first_name: str = "Adelaide",
+    last_name: str = "Ashgrove",
+    party: str = "Democrat",
+    state: str | None = "CA",
+    chamber: str | None = "Senate",
+    dob: date | None = date(1960, 5, 4),
+    gender: str | None = "F",
+) -> Politician:
+    """Build a detached :class:`~app.models.Politician` for :class:`FakePoliticianRepo`.
+
+    Not :class:`tests.factories.PoliticianFactory`, which flushes to a session — the whole
+    point of the unit tier is that there is no session. Every column has a default because
+    the roster's primary key is the only thing a test usually cares to vary; the four
+    nullable columns default to values rather than ``None`` so a test that wants a null says
+    so explicitly.
+    """
+    return Politician(
+        politician_id=politician_id,
+        first_name=first_name,
+        last_name=last_name,
+        party=party,
+        state=state,
+        chamber=chamber,
+        dob=dob,
+        gender=gender,
+    )
+
+
 def make_watchlist(
     *,
     user_id: uuid.UUID,
@@ -660,6 +809,7 @@ def make_user(
 
 __all__ = [
     "ERROR_BODY_KEYS",
+    "FakePoliticianRepo",
     "FakeStockDataRepo",
     "FakeStockRepo",
     "FakeUserRepo",
@@ -668,6 +818,7 @@ __all__ = [
     "assert_error_envelope",
     "make_candle",
     "make_entry",
+    "make_politician",
     "make_stock",
     "make_user",
     "make_watchlist",
