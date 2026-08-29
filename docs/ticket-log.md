@@ -1227,3 +1227,52 @@ if the user has toggled since"), and no anti-flash script.
 
 *Orchestrator note:* it flagged a stale docstring in `App.jsx` naming the wrong ticket and left it
 alone as out of scope. Corrected here — it now names ANV-27, which actually owns the router.
+
+### ANV-26 — Done
+Commit `c61f564`, 39 new tests (83 → **122**). **Verified independently:** 122 pass, lint clean, and
+the only `setItem` calls in the whole app are the theme key and one auth writer — no password
+anywhere.
+
+**It caught an inconsistency in the orchestrator's own docs and resolved it correctly.**
+`backlog.md` put the auth store in `features/auth/`; `CLAUDE.md` §5's layout names `providers/` as
+the home of the auth context. It followed the **contract** over the sketch — `useAuth` is consumed
+by the router, the header and the login page, so it is a cross-feature hook by definition — leaving
+`features/auth/` with what §5 actually assigns to a feature: `api.js` and the storage policy. The
+backlog has been corrected.
+
+**Two genuine bugs found and mutation-verified:**
+
+1. **Installing the token store only in an effect has a real ordering hole.** React runs effects
+   **bottom-up**, so a descendant — including ANV-27's `RouterProvider` starting its initial route
+   load — issues a protected request against the *anonymous* store: no header, a 401, nothing to
+   refresh with, and a spurious sign-out on the first paint after reload. The store is therefore
+   installed **during render** as well; the effect still owns the uninstall. Removing the
+   render-phase install fails `is installed before a descendant's mount effect runs`. *(This
+   deviates from the ticket's "call it from the provider's effect", correctly.)*
+2. **A `useRef` guard cannot make a render-phase side effect happen once.** StrictMode re-invokes
+   render with a **fresh set of hooks**, so the second pass installs a second store and leaves the
+   install unbalanced after unmount. The guard is a module-level slot that **replaces rather than
+   stacks** — the same shape as `client.js`'s `refreshInFlight`.
+
+**Two test-harness traps, now in `CLAUDE.md`:**
+- **`vi.spyOn(window.localStorage, 'getItem')` is a no-op** on jsdom's Proxy — it stores an item
+  *named* `"getItem"` and leaves the real method in place. **Two of its own storage-failure tests
+  passed vacuously** until it noticed; they now spy `Storage.prototype` and seed a value first.
+- **A rejection escaping `act()` unbalances React's acting depth**, making the *next* test's
+  `render()` silently not flush. It presented as a null context in an unrelated test.
+
+**`restore()` is synchronous — no boot refresh, and therefore no boot-pending state.** ANV-24's
+interceptor already refreshes-and-replays the first protected 401, which is the exact reload case.
+An explicit boot call would cost a round trip on every load including ones that never need a token,
+**spend a rotation to learn nothing**, and fail while the user is on a public page rather than when
+they ask for something. Stated cost: `isAuthenticated` is provisional until a protected call
+succeeds. This also means the old `PersistLogin`'s habit of blocking the entire route tree behind a
+"Loading..." div on every page load simply has nothing to block.
+
+**The access-token-never-persisted proof is not an API assertion.** The tests dump **every key and
+value** of `localStorage` after a login and again after a real rotation through the interceptor, and
+assert the key set is exactly `[anvex.refresh_token]` with no value containing the access token.
+Verified non-vacuous: adding one `setItem('anvex.access_token', …)` fails 3 tests.
+
+**`login` rejects with an `ApiError` rather than raising through `useErrors`** — a bad password
+belongs beside the password field, not in a 10-second global banner.

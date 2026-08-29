@@ -259,7 +259,13 @@ Ported from the old app, with the `useDarkMode`/`useErrors` hooks.
 **Tests:** theme toggles the root class and persists; error auto-clears on its timer.
 
 ### ANV-26 · Auth state and token lifecycle · M · dep: ANV-25
-`src/features/auth/` — auth store: access token **in memory**, refresh token in `localStorage`,
+**Corrected 2026-08-29:** this entry said `src/features/auth/`, but `CLAUDE.md` §5's layout names
+`providers/` as the home of the auth context, and `useAuth` is consumed by the router, the header
+and the login page — a cross-feature hook by definition. It shipped as
+`providers/AuthContext.js` + `providers/AuthProvider.jsx` + `hooks/useAuth.js`, with
+`features/auth/` keeping what §5 actually assigns to a feature: `api.js` and the storage policy.
+
+Auth store: access token **in memory**, refresh token in `localStorage`,
 plus `login`, `logout`, `restore` (silent refresh on boot) and `useAuth`. Replaces the old
 `AuthProvider` + `PersistLogin` + `useRefreshToken` trio.
 **Tests:** login stores tokens, logout clears both, boot-time restore succeeds and fails cleanly,

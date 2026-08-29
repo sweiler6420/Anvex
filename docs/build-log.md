@@ -82,8 +82,11 @@ modified. What each contributes to Anvex:
 | ANV-23 | Vite scaffold, Tailwind and test harness | **Done** |
 | ANV-24 | API client layer | **Done** |
 | ANV-25 | Theme and error providers | **Done** |
-| ANV-26 | Auth state and token lifecycle | Next |
-| ANV-27 … ANV-41 | see `backlog.md` | Not started |
+| ANV-26 | Auth state and token lifecycle | **Done** |
+| ANV-27 | TanStack Router and route guards | Next |
+| ANV-28 … ANV-41 | see `backlog.md` | Not started |
+
+**122 frontend tests** passing in-container, lint clean.
 
 **2,811 tests** passing with the full stack up (2,497 with Docker stopped — DB, S3 and broker tiers
 skip), 99% coverage. `ruff check` and `ruff format --check` clean across 176 files.
@@ -185,6 +188,38 @@ ANV-15's ownership sweep fails the suite if a new use case is added without isol
 - **Known gap, deliberately left for whoever owns the shell (ANV-28):** the theme class is applied
   in an effect, so a first paint before React mounts still flashes the light default. The fix is a
   two-line blocking script in `index.html`.
+
+**Auth (ANV-26) — what ANV-27/29 plug into:**
+- **`useAuth() → { isAuthenticated, login, logout, restore }`.** Deliberately **no `accessToken`** —
+  the transport reads it through the seam, so there is exactly one copy. Tokens live in refs;
+  `isAuthenticated` is the only state, so a silent refresh does not re-render the app.
+- **`restore()` is synchronous and there is no boot-pending state.** A stored refresh token means
+  "provisionally signed in", known during the first render. ANV-24's interceptor already
+  refreshes-and-replays the first protected 401, so an explicit boot refresh would cost a round trip
+  on every load, **spend a rotation to learn nothing**, and fail while the user is on a public page.
+  **ANV-27's spec line about "a pending component for the silent-refresh boot window" no longer
+  applies — there is no such window.**
+- **`isAuthenticated` is provisional.** A guard can admit a user whose refresh token the server has
+  already killed; `onSignOut` is what corrects it.
+- **The redirect seam is `onSignOut({reason})`, a prop on `AuthProvider`** — a prop, not the router,
+  so the store mounts and tests without one. It fires **at most once per session**, so three
+  requests hitting one dead session produce one navigation. **ANV-27 passes it in `main.jsx`:**
+  `session_expired` → `/login?redirect=<current path>`, `logout` → plain `/login`.
+  Mount `AuthProvider` **above** `RouterProvider`.
+- **`login` rejects with an `ApiError`** rather than raising through `useErrors` — a bad password
+  belongs beside the password field, not in a 10-second global banner.
+- **"Remember me" primitives live in `features/auth/authStorage.js`** (`readRememberedUsername`,
+  `rememberUsername`) and **ANV-29 owns the checkbox**. Username only. **Logout does not forget the
+  username.** There is no password prefill — that is the bug being removed.
+- `LOGIN_PATH` / `RECOVERY_PATH` are exported so nothing hardcodes a URL. `requestRecovery({username})`
+  is already written and tested for ANV-31.
+
+**Two test-harness traps found in ANV-26 — they will bite you too:**
+- **`vi.spyOn(window.localStorage, 'getItem')` is a no-op** on jsdom's Proxy: it stores an item
+  *named* `"getItem"` and leaves the real method in place. Spy on **`Storage.prototype`** instead.
+  Two of ANV-26's own storage-failure tests passed vacuously until it caught this.
+- **A rejection escaping `act()` unbalances React's acting depth**, which makes the *next* test's
+  `render()` silently not flush — it presents as a null context in an unrelated test.
 
 **API contract facts the UI must respect:**
 - **Prices are quoted JSON strings**, not numbers — `"1234.5678"`. That is what preserves the fourth
