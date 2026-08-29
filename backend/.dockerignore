@@ -1,0 +1,32 @@
+# Keep the build context small and host-specific artefacts out of the image.
+# Anything listed here is invisible to `docker build`, which also means it can never
+# invalidate a layer cache by changing.
+
+# Host virtualenv — the image builds its own at /opt/venv (see Dockerfile).
+.venv/
+venv/
+
+# Python bytecode / tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Tests are not shipped in the runtime image (dev deps are not installed either).
+tests/
+
+# Docs and IaC are not runtime artefacts.
+docs/
+infra/
+
+.git/
+.gitignore
+Dockerfile
+.dockerignore

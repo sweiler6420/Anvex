@@ -205,6 +205,20 @@ Note that steps 5 and 6 both reuse step 4. **That reuse is the whole reason for 
   `deps`. Never `os.getenv` outside that module.
 - **Logging:** structured, request-id-tagged. No bare `print`.
 - **Auth:** JWT access + refresh (`python-jose`), bcrypt password hashing, `OAuth2PasswordBearer`.
+- **Containers:** the compose service names *are* the in-network hostnames the settings default
+  to — `db`, `db-test`, `redis`, `minio`, `api`, `worker`, `beat`, `web`. Renaming a service is a
+  config change. Containers reach each other by service name on the service's own port; the
+  published host ports are a developer convenience and live in `.env` (`*_HOST_PORT`).
+- **`db` vs `db-test`:** `db` is the application database (named volume, survives restarts).
+  `db-test` is the **only** database a test may write to — a second Postgres with no volume, so it
+  starts empty every time. Nothing in `app/` ever knows it exists.
+- **Container healthcheck is `/health`, never `/health/ready`.** Readiness depends on Postgres, so
+  wiring it to the healthcheck turns a database blip into an API restart loop. `/health/ready` is
+  what `depends_on` conditions and (later) an ALB target group poll.
+- **Image layout:** the backend image installs its venv at `/opt/venv`, deliberately outside the
+  `/app` working directory, because the dev compose service bind-mounts the source over `/app`.
+  The project itself is never installed — the source is imported from the working directory, which
+  is what makes the bind mount plus `--reload` work.
 
 ---
 
@@ -253,6 +267,8 @@ frontend/src/
   - `tests/api/` — route contract tests: status codes, response shape, auth enforcement,
     validation errors. Services are stubbed via dependency overrides.
 - Shared fixtures in `tests/conftest.py`; model factories in `tests/factories/`.
+- **The default suite must run with Docker stopped.** A test that needs a container skips itself,
+  never fails. Tests needing the *whole* compose stack are opt-in behind `ANVEX_COMPOSE_TEST=1`.
 - Run: `uv run pytest` (or `scripts/test.ps1`).
 
 ### Frontend — vitest

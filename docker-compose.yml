@@ -1,0 +1,267 @@
+# Anvex local development stack.
+#
+# Every service reads the **single repo-root `.env`** (CLAUDE.md §2) via `env_file`.
+# There is deliberately no per-stack env file: one file, one source of truth, and every
+# new key lands in `.env.example` in the same commit.
+#
+# `env_file` injects the file into the container; `${VAR}` interpolation in *this* file
+# is a separate mechanism that Compose serves from the same `.env`. Where a service needs
+# a value that differs from the shared default (the test database name, in-network
+# hostnames) an explicit `environment:` entry overrides `env_file`.
+#
+# Usage:
+#   docker compose up -d db redis minio minio-init api   # the working dev stack
+#   docker compose up -d db-test                         # backend test database (ANV-6)
+#   docker compose --profile celery up -d                # worker/beat placeholders (ANV-21)
+#   docker compose --profile frontend up -d              # web placeholder (ANV-23)
+#   docker compose down -v                               # stop and drop volumes
+
+name: anvex
+
+services:
+  # ------------------------------------------------------------------ Postgres (dev)
+  db:
+    image: postgres:16-alpine
+    env_file: .env
+    environment:
+      # The API talks to `db` over the compose network; the entrypoint only reads
+      # POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB, all of which come from .env.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      # Not 5432 by default: a natively-installed Postgres commonly owns it, and on
+      # Windows both it and the Docker proxy can bind successfully - host clients then
+      # silently reach the wrong server. See .env.example.
+      - "${POSTGRES_HOST_PORT:-5442}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `-U`/`-d` matter: a bare pg_isready reports ready while the entrypoint is still
+      # running init scripts on a temporary, socket-only server.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  # ------------------------------------------------------------- Postgres (tests only)
+  db-test:
+    image: postgres:16-alpine
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_TEST_DB:-anvex_test}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_TEST_HOST_PORT:-5433}:5432"
+    # No named volume, on purpose. A test database that survives a restart is a test
+    # database that carries yesterday's rows into today's assertions. tmpfs means initdb
+    # runs on every start and the disk never sees it — which is also considerably faster.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      # POSTGRES_DB is overridden above, so this checks the *test* database by name.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------- Redis
+  redis:
+    image: redis:7-alpine
+    env_file: .env
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------- MinIO
+  minio:
+    image: minio/minio:latest
+    env_file: .env
+    environment:
+      # MinIO's own names for the credentials the app knows as S3_*.
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-anvexminio}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-anvexminio}
+    command: ["server", "/data", "--console-address", ":9001"]
+    ports:
+      - "${MINIO_HOST_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  # One-shot: create the bucket the app expects, then exit 0. `depends_on` elsewhere uses
+  # `service_completed_successfully` to wait for it rather than racing the first upload.
+  minio-init:
+    image: minio/mc:latest
+    env_file: .env
+    depends_on:
+      minio:
+        condition: service_healthy
+    # `$$` escapes Compose interpolation so the *shell inside the container* expands these
+    # from the injected env, keeping the credentials out of the rendered compose config.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        mc alias set anvex "http://minio:9000" "$$S3_ACCESS_KEY_ID" "$$S3_SECRET_ACCESS_KEY"
+        mc mb --ignore-existing "anvex/$$S3_BUCKET"
+        echo "minio-init: bucket '$$S3_BUCKET' ready"
+    restart: "no"
+
+  # ------------------------------------------------------------------------------- API
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runtime
+    image: anvex/api:dev
+    env_file: .env
+    environment:
+      # In-network hostnames. These already match the .env defaults, but stating them
+      # here means a developer who points .env at a host-local Postgres for a moment does
+      # not silently break the container.
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      S3_ENDPOINT_URL: http://minio:9000
+    ports:
+      - "${API_HOST_PORT:-8000}:8000"
+    volumes:
+      # Dev hot-reload. The venv lives at /opt/venv, outside this mount, so the host's
+      # Windows-built backend/.venv cannot shadow the container's interpreter.
+      - ./backend:/app
+    # --reload-dir keeps the watcher off .venv / .pytest_cache, which otherwise costs a
+    # few thousand inotify watches for no benefit.
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Healthcheck is inherited from the image: GET /health (liveness, no I/O).
+    restart: unless-stopped
+
+  # -------------------------------------------------------- Celery placeholders (ANV-21)
+  #
+  # ANV-21 owns the real Celery app (`app/jobs/celery_app.py`). Inventing one here would
+  # mean two definitions of the broker wiring and a guaranteed conflict, so these are
+  # *defined but not started*: they sit behind the `celery` profile and run a trivial
+  # command that only proves the image, the env and the Redis dependency are wired.
+  # ANV-21 replaces the `command:` with the real worker/beat invocations and, if it wants
+  # them up by default, drops the `profiles:` key.
+  worker:
+    profiles: ["celery"]
+    image: anvex/api:dev
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runtime
+    env_file: .env
+    # The image HEALTHCHECK polls /health on :8000; a worker serves no HTTP, so it would
+    # be permanently unhealthy. ANV-21 can replace this with a `celery inspect ping`.
+    healthcheck:
+      disable: true
+    environment:
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
+      S3_ENDPOINT_URL: http://minio:9000
+    volumes:
+      - ./backend:/app
+    command:
+      - python
+      - -c
+      - |
+        print("worker placeholder: ANV-21 replaces this with `celery -A app.jobs.celery_app worker`", flush=True)
+        import time
+        while True:
+            time.sleep(3600)
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  beat:
+    profiles: ["celery"]
+    image: anvex/api:dev
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runtime
+    env_file: .env
+    # The image HEALTHCHECK polls /health on :8000; a worker serves no HTTP, so it would
+    # be permanently unhealthy. ANV-21 can replace this with a `celery inspect ping`.
+    healthcheck:
+      disable: true
+    environment:
+      REDIS_HOST: redis
+    volumes:
+      - ./backend:/app
+    command:
+      - python
+      - -c
+      - |
+        print("beat placeholder: ANV-21 replaces this with `celery -A app.jobs.celery_app beat`", flush=True)
+        import time
+        while True:
+            time.sleep(3600)
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ------------------------------------------------------------ Frontend placeholder (ANV-23)
+  #
+  # ANV-23 creates frontend/package.json, frontend/Dockerfile and the real dev server.
+  # Until then this is a defined-but-not-started stub behind the `frontend` profile: it
+  # pins the Node version and the port the API's CORS origins already allow, and nothing
+  # else. ANV-23 swaps `image:` for its own `build:` block.
+  web:
+    profiles: ["frontend"]
+    image: node:22-alpine
+    env_file: .env
+    working_dir: /app
+    ports:
+      - "${WEB_HOST_PORT:-5173}:5173"
+    volumes:
+      - ./frontend:/app
+    command:
+      - sh
+      - -c
+      - >
+        echo "web placeholder: ANV-23 replaces this with the Vite dev server on :5173";
+        exec sleep infinity
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  miniodata:
