@@ -1335,3 +1335,56 @@ Router went in as the first and only router; nothing was removed.
 It also found empirically that the **root route needs `validateSearch: () => ({})`** — TanStack
 merges a parent match's search into its child's, and a route without it passes the raw query string
 through.
+
+### ANV-28 — Done · **frontend foundation complete**
+Commit `4bd9e33`, 16 files, 55 new tests (178 → **233**). **Verified independently:** 233 pass, lint
+clean, and the pre-paint script is genuinely in the served head.
+
+**I mutation-tested the drift detection myself.** Changing the pre-paint script's fallback to
+unconditional light — ANV-25's original bug — fails **exactly 7 tests**, matching its claim.
+Restored: 25 pass, tree clean.
+
+**The pre-paint sync is a real second implementation, guarded by a matrix.** `themeStorage.js` is the
+single home for the key, class names, media query and `resolveInitialTheme`; the script *text* is
+interpolated from them and injected via a Vite `transformIndexHtml` plugin (so dev and build agree),
+and the injector **throws** when the marker is missing. But interpolation alone only catches a
+*rename* — the rule itself is duplicated in JS-as-string, so the test runs **both implementations**
+over (stored value × OS preference): nothing / valid / unrecognised / empty × dark / light / no
+`matchMedia`, asserting the same class and exactly one class.
+
+**A real bug fixed that only bites in the new architecture:** the old header's `<a href='/login'>`
+and `<a href='/signup'>` are **full document navigations**, which reload the bundle and **discard
+ANV-26's in-memory access token**. Now `<Link>`. An `href` assertion cannot tell the two apart, so
+the test *clicks* and asserts the router moved.
+
+**It declined `@headlessui/react` on the pattern, not the size.** The drawer renders immediately
+after its toggle inside the same `<nav>`, so tab order already runs button → panel → page: that is
+the WAI-ARIA **disclosure navigation** pattern, which must **not** trap focus. Headless UI's `Dialog`
+would add the trap and inert background the pattern rejects, and its `Disclosure` supplies six ARIA
+attributes rather than a focus manager. `@heroicons` was declined because it is data, not behaviour —
+four MIT path strings inlined. Focus is deliberately not trapped, and a test asserts Tab leaves the
+panel.
+
+**Accessibility problems found in the old header, all fixed with a test each:** the hamburger was a
+bare `<button>` around an SVG with no `aria-label`, no `aria-expanded`, no `aria-controls`; Escape
+did nothing; nothing restored focus; and the drawer closed only from each link's own `onClick`, so a
+guard redirect, a Back press or a sign-out left it **hanging open over the new page**. Also: the
+switcher's static `aria-label="Toggle theme"` gave a screen-reader user no feedback (now "Switch to
+dark theme" ↔ "Switch to light theme"), and the brand had no home link at all.
+
+Also structural: `Layout` renders the nav as a **sibling** of `<main>`; the old shell wrapped the
+header *inside* `<main>`, putting site navigation inside the document's primary content.
+`navItems.js` holds one list rendered by both the desktop bar and the drawer — the old file had two
+copies of the `.map()`.
+
+**One claim did not survive its own mutation, and it corrected it rather than keeping it.** It wrote
+a test asserting the sign-out does not race a guard-issued `/login?redirect=…`; removing exactly
+that guard in `App.jsx` left **all 233 tests green**, because `onSignOut`'s navigation has already
+replaced the protected match. It renamed the test to what it actually asserts and recorded the
+negative result in the comment. **That is the third ticket to self-report a non-discriminating
+test.**
+
+**12 mutations run**, including: root back to a bare `<Outlet/>` fails **30**; `activeOptions`
+removed fails 6 (TanStack's defaults make `/` a prefix of every route, so Home stays lit on
+`/research`, and ignore the fragment, so all five marketing items light at once); logout raising the
+wrong reason fails 4.

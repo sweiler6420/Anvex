@@ -84,10 +84,11 @@ modified. What each contributes to Anvex:
 | ANV-25 | Theme and error providers | **Done** |
 | ANV-26 | Auth state and token lifecycle | **Done** |
 | ANV-27 | TanStack Router and route guards | **Done** |
-| ANV-28 | Layout, header and dark-mode switcher | Next |
-| ANV-29 … ANV-41 | see `backlog.md` | Not started |
+| ANV-28 | Layout, header and dark-mode switcher | **Done** — *frontend foundation complete* |
+| ANV-29 | Login page | Next — *first page ticket* |
+| ANV-30 … ANV-41 | see `backlog.md` | Not started |
 
-**178 frontend tests** passing in-container, lint clean. Backend: 2,811.
+**233 frontend tests** passing in-container, lint clean. Backend: 2,811. **Total: 3,044.**
 
 **2,811 tests** passing with the full stack up (2,497 with Docker stopped — DB, S3 and broker tiers
 skip), 99% coverage. `ruff check` and `ruff format --check` clean across 176 files.
@@ -247,6 +248,29 @@ ANV-15's ownership sweep fails the suite if a new use case is added without isol
 - `src/test/setup.js` now no-ops `window.scrollTo`; anything mounting a router inherits it.
 - **ANV-25's flash-of-light gap is ANV-28's:** the theme class is applied in an effect, so first
   paint before React mounts shows the light default. Two-line blocking script in `index.html`.
+
+**Layout and header (ANV-28) — what every page ticket plugs into:**
+- **`Layout` is `rootRoute.component`**, so every route including the 404 renders under it. A page
+  ticket replaces `component: () => <RoutePlaceholder …/>` in its route module with the feature
+  component — **one line, nothing else in the route changes.** Do not add a header or a page wrapper.
+- **Pages contain no navigation code** (ANV-27's rule). The header's logout button is the only
+  sign-out trigger.
+- **Use `<Link>`, never `<a href>`, for internal destinations.** The old app's `<a href='/login'>`
+  is a **full document navigation**, which reloads the bundle and **discards the in-memory access
+  token**. An `href` assertion cannot discriminate the two — write a test that *clicks* and asserts
+  the router moved.
+- `@components/ui/icons` exists (hand-rolled, four MIT paths). Add icons there, not inline.
+- **Do not touch `providers/themeStorage.js`'s key or rule without re-running
+  `themeStorage.test.jsx`** — it holds the single definition the pre-paint script and
+  `ThemeProvider` are both built from, and its matrix test is what stops them drifting.
+- **Test harness:** anything mounting the router needs `ThemeProvider` + an `AuthContext.Provider`
+  around it (the *same* `auth` object in both React and router context). `Header.test.jsx`'s
+  `renderAt` is the copyable helper. The desktop and drawer copies are both in the DOM under jsdom,
+  so scope with `within()` using `header-desktop-actions` / `header-drawer` / `header-desktop-nav`.
+- **Not ported, deliberately:** the old header's ~80-line `IntersectionObserver` scroll-spy. Its
+  sections arrive with ANV-32, and jsdom has neither layout nor `IntersectionObserver`, so it would
+  be unverifiable code observing elements that do not exist. Active state comes from the router's
+  location instead. **ANV-32 should decide whether it wants scroll-spy back.**
 
 **API contract facts the UI must respect:**
 - **Prices are quoted JSON strings**, not numbers — `"1234.5678"`. That is what preserves the fourth
