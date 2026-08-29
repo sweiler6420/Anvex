@@ -7,10 +7,12 @@
  * feature that uses it, which is why this file exists and why there is no
  * `lib/api/auth.js`.
  *
- * Both calls here go out on **`publicApi`**, and that is a security decision rather than a
- * convenience: neither has anything to authenticate with, and putting them on `authApi`
+ * Every call here goes out on **`publicApi`**, and that is a security decision rather than a
+ * convenience: none of them has anything to authenticate with, and putting them on `authApi`
  * would attach a stale bearer token and make a 401 from *login* re-enter the refresh
- * interceptor.
+ * interceptor. Registration is the same case — a caller who already had a session would not
+ * be creating an account, and a leftover token on the request is a credential sent where it
+ * is not needed.
  *
  * Failures leave here as an `ApiError` with a `code` (ANV-24), because `publicApi`'s
  * response interceptor already normalises them. So there is no `try`/`catch` below and no
@@ -25,6 +27,12 @@ export const LOGIN_PATH = '/v1/auth/login'
 
 /** "I have forgotten my password." Always 202, whoever asked. */
 export const RECOVERY_PATH = '/v1/auth/recovery'
+
+/**
+ * Registration. **Not** an `auth` route — creating an account is a write to the `users`
+ * collection, so `POST /v1/users` is where the backend put it (CLAUDE.md §4).
+ */
+export const USERS_PATH = '/v1/users'
 
 /**
  * Sign in with a username **or** an email address.
@@ -58,6 +66,33 @@ export async function login({ username, password }) {
   })
 
   return readTokenPair(response)
+}
+
+/**
+ * Create an account (ANV-30).
+ *
+ * `POST /v1/users` takes **JSON**, unlike login — the OAuth2 password flow is a standard
+ * this API implements for sign-*in* only, and registration has a third field that form has
+ * no place for. So this is the instance default content type and there is no override.
+ *
+ * **The failures worth knowing about are 409s.** The backend answers a taken email or a
+ * taken username with `code: "conflict"` and `details.field` naming which one
+ * (`"email"` / `"username"`), and CLAUDE.md §4 explains why registration is the one
+ * endpoint allowed to leak that: a sign-up form that will not say which field clashed is
+ * unusable. Nothing is translated here — a caller branches on `err.code` and
+ * `err.details.field`, never on `err.message`.
+ *
+ * @param {{username: string, email: string, password: string}} account — `email` is
+ *   expected already trimmed and lowercased by the caller; this module normalises nothing,
+ *   because a transport that quietly rewrites what it was given is a place bugs hide.
+ * @returns {Promise<object>} the created `UserOut` (`{user_id, username, email,
+ *   created_at}`). It carries **no password** — no output schema in the API has one — and
+ *   the sign-up page ignores it: what it hands to `/login` is the username the user typed
+ *   and validated, not a value echoed back over the network.
+ */
+export async function register({ username, email, password }) {
+  const response = await publicApi.post(USERS_PATH, { username, email, password })
+  return response?.data
 }
 
 /**

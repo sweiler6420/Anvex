@@ -1264,6 +1264,54 @@ ANV-31 copy it**, and a page that deviates is the one that is wrong.
   whole `App` with the real store and MSW. A page ticket that only writes the first harness
   has not tested the two things it is most likely to have got wrong.
 
+### A page that *creates* something (ANV-30)
+
+ANV-29's five parts are unchanged; these are the rules a **registration-shaped** form adds,
+and each of them is a place the sign-up port would otherwise have copied a defect.
+
+- **"A page contains no navigation code" is a rule about *sessions*, and a transition that
+  produces no session is the exception.** ANV-27 put "where does a signed-in user go" in
+  `/login`'s `beforeLoad` because a guard runs on *every* arrival, form or not. `POST
+  /v1/users` returns a `UserOut`, not a token pair: `isAuthenticated` never flips, no guard
+  re-runs, and nothing else in the application is in a position to move the user — so the
+  sign-up → login hand-off is written in the page, and it is the only navigation a page may
+  own. It goes with `replace: true`, so Back does not return to a filled-in form for an
+  account that now exists (asserted on `window.history.length`, which a `push` changes).
+- **A hand-off between pages carries an identifier, never a credential.** Session-history
+  state is persisted to disk for tab restore, so a password handed that way outlives the tab.
+  The proof is an assertion on the **whole** state object *and* the whole of `localStorage`
+  after a real sign-up, not on which builder was called.
+- **A rule the form displays and the rule it enforces are one array.** The old page listed
+  four password rules in a tooltip beside a `validator.isStrongPassword` call that enforced
+  whichever ones the library happened to default to — including a **lowercase rule nothing on
+  screen mentioned**. One `PASSWORD_RULES` array feeds both the rendered list and the
+  validator, so "promised but not enforced" is unrepresentable; the mutation that deletes a
+  rule fails the display test and the enforcement test together, which is what proves the
+  coupling. Predicates are Unicode (`\p{Lu}`, `\p{Nd}`, "neither letter nor number"), because
+  an ASCII-only class tells someone their capital `Ä` is not a capital.
+- **Requirements a user must satisfy are permanently visible and attached with
+  `aria-describedby`, never a hover tooltip.** Hover is not an interaction a keyboard or
+  touch user has, so rules shown on `onMouseOver` are rules some users can never read — and
+  the old ones were additionally inside the *error* branch, so they appeared only after a
+  rejection. The description is **static**: a description that rewrites itself per keystroke
+  is re-announced at unpredictable moments. A field may carry two ids (`rules error`).
+- **Do not put `maxLength` on a field whose value is being *created*.** It truncates a paste
+  silently, so a manager filling an 80-character password leaves 72 in the box and the account
+  is created with a password the user does not have. A ceiling on a *created* value is a
+  validation rule that produces a message; `maxLength` is for a field whose value already
+  exists elsewhere (`LoginPage`'s identifier).
+- **The client is the only place the password *strength* policy exists.** The API enforces
+  length (7–72) and nothing else — `app/schemas/user.py` says strength "belongs in
+  `app/domain/`" and no such rule was ever written. So these four rules are not a second copy
+  of a server rule that could drift; they are the policy. Worth a backend ticket, not a
+  silent assumption.
+- **A 409 names the field to fix, and the field is read from `details.field`.** Registration
+  is §4's one deliberate enumeration exception, and `details.field` is the machine-readable
+  half: an unrecognised field (or any other status) falls through to the form-level banner,
+  because routing a message onto a control that is not on screen hides it completely. **The
+  test that keeps this honest sends a 409 whose message names no field at all** — an
+  implementation matching on the sentence has nothing to match and puts it in the banner.
+
 ### Frontend test harness (ANV-23)
 
 The mirror of §6's backend rules: **extend the one setup file and the one MSW server; never start a
