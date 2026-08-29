@@ -49,6 +49,38 @@ window.scrollTo = () => {}
  */
 Element.prototype.scrollIntoView = () => {}
 
+/**
+ * An inert `ResizeObserver` (ANV-33).
+ *
+ * jsdom implements no layout at all, so it ships no `ResizeObserver` — the constructor is
+ * simply absent, and `new ResizeObserver(...)` is a `ReferenceError` that takes the whole
+ * component down rather than degrading. `features/desktop/`'s `useContainerSize` needs one
+ * to exist; this is it.
+ *
+ * **It never calls its callback, and that is the point.** A stub that fired with a
+ * fabricated `contentRect` would make every test downstream of a measurement pass, and what
+ * it would prove is the number the stub invented — jsdom has no box model, so nothing in
+ * this suite could ever contradict it. Reporting nothing is the truthful behaviour: with no
+ * layout, nothing has a size, and a component that measures its container correctly renders
+ * as unmeasured.
+ *
+ * A test that needs a size says so out loud instead. `BinPackingLayout` takes the
+ * measurement as a `useContainerSize` prop, so a test writes
+ * `useContainerSize={() => ({width: 800, height: 400})}` in its own file, where the invented
+ * number sits beside the assertion it supports and cannot be mistaken for a measurement.
+ *
+ * A plain class, not a `vi.fn()` — the same rule as `window.scrollTo` above: a shared spy in
+ * the setup file is state leaking between tests, and a test that genuinely wants to watch
+ * the calls installs its own.
+ */
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+}
+
 afterEach(() => {
   cleanup()
   server.resetHandlers()

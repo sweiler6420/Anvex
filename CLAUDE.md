@@ -829,14 +829,16 @@ iOS/Android.
 ```
 frontend/src/
 ├── routes/       # TanStack Router route modules. Route = layout + data loading + guard only.
-├── features/     # one folder per domain area (auth, watchlist, research, portfolio):
+├── features/     # one folder per domain area (auth, home, desktop, watchlist, …):
 │                 #   components/, hooks/, api.js  — feature-local, not shared
+│                 #   plus a pure half (geometry/, rules/) where one has real algorithms
 ├── components/   # genuinely shared presentational components (ui/, layout/)
 ├── lib/          # api client, axios instances + interceptors, router config, env config
 ├── hooks/        # cross-feature hooks only
 ├── providers/    # React context providers (auth, theme, errors)
 ├── styles/
-└── test/         # setup.js (the one setupFiles entry) + msw/{handlers,server}.js
+└── test/         # setup.js (the one setupFiles entry), msw/{handlers,server}.js,
+                  #   and shared harness helpers (seededRandom.js)
 ```
 
 - **Routes are thin.** A route file declares the route, its `beforeLoad` auth guard, and renders a
@@ -1428,6 +1430,77 @@ are the rules a **content** page adds, and the two shell decisions ANV-28 deferr
   `sm:1/2` (a typo for `sm:w-1/2`, so not a Tailwind class at all) and only `Pricing`'s middle card
   carries `h-full`. All three are ported as found and reported, because a port that quietly
   improves the wording is a port nobody can review against the original.
+
+### A subsystem with real algorithms in it (ANV-33)
+
+`features/desktop/` is the bin-packing window system: a grid of cells, non-overlapping windows
+on it, and the drag, resize, collapse, grow, fullscreen and drop gestures that move them. It is
+the first thing ported into Anvex that is *mostly algorithm*, and these are the rules that
+follow from that rather than from it being a window manager.
+
+- **Split the feature into a pure half and a stateful half, and put the tests in the pure
+  half.** `features/<x>/geometry/` (or `math/`, or `rules/` — the name says what kind of pure)
+  holds functions of numbers: no React, no DOM, no clock, no measurement. `components/` holds
+  the state. The split is not cosmetic — it is what decides whether the interesting behaviour
+  is testable at all, because a jsdom test of the component half can never assert a position.
+  The original had 671 lines of component with the maximise algorithm written as an anonymous
+  `onClick` in the middle of its JSX; here that is `growToFill(windows, id, grid)` and its pass
+  order is four assertions. **The rule of thumb is the backend's `app/domain/` rule wearing a
+  different hat: if it would still be true on paper, it does not belong in a component.**
+- **One predicate, one implementation.** The original wrote its collision test twice — once in
+  the reflow module taking a `placed` array, once inside the component reading component state
+  — which is how "the reflow says it fits and the drag says it does not" becomes possible.
+  A geometry module exports the predicate; every caller passes it bounds.
+- **jsdom has no layout, so a component that measures its container renders as unmeasured —
+  and that is the correct behaviour, not a broken test.** `getBoundingClientRect()` is 0×0,
+  `offsetWidth` is 0, and there is no `ResizeObserver`. `src/test/setup.js` installs an
+  **inert** one: it exists so the constructor does not throw, and it never fires. A stub that
+  fired with a fabricated `contentRect` would make every downstream test pass while proving
+  the number the stub invented, because nothing in the suite has a box model to contradict it.
+- **When a test must fabricate a measurement, fabricate it through a named prop, not a global
+  mock.** `BinPackingLayout` takes `useContainerSize` as a prop defaulting to the real hook,
+  so a test writes `useContainerSize={() => ({width: 800, height: 400})}` and the invented
+  number sits beside the assertion it supports. A `ResizeObserver` mock hides the same
+  fabrication in a fixture two screens away, where the next reader takes it for a measurement.
+- **Say in the test file which tests prove behaviour and which prove wiring.** A geometry test
+  proves behaviour: it is a claim about integers and would read identically in Node. A
+  component test built on a fabricated size proves that the component **passes what it
+  measured to the geometry and renders what the geometry answered** — real, and worth having,
+  and not evidence that a real panel produces those numbers. Both file headers say so in as
+  many words.
+- **`fireEvent.dragOver(el, {clientX})` silently drops the coordinate.** jsdom has no
+  `DragEvent` constructor, so Testing Library falls back to a plain `Event`, which ignores
+  `clientX` entirely. Everything downstream then computes with `NaN` — and because every
+  comparison against `NaN` is false, an impossible position reads as legal and the test passes
+  for the wrong reason. Dispatch a `MouseEvent` named `drop`/`dragover` instead (React's
+  synthetic system dispatches on the event's *type*, not its constructor) and attach a
+  `dataTransfer` with `Object.defineProperty`.
+
+### Porting something that is mostly algorithm (ANV-33)
+
+ANV-32's "porting is not transcription" rule, extended to code with no markup in it.
+
+- **A port does not carry code nothing calls, and names exactly what it left behind.** The old
+  `WindowManager.js` exported four reflow strategies; the application reached one. The other
+  three (plus their helpers and a grid function whose body was `fitsW ? requiredCols :
+  requiredCols`) are roughly 200 lines of untested geometry with no behaviour to preserve, and
+  one of them read backwards from its own name. They are not ported, and the module that
+  replaced them says which they were and why. **Code nothing calls has no behaviour, so
+  "behaviour-preserving" does not cover it.**
+- **A defect kept for compatibility gets a test that pins it, named `DEFECT`, with the correct
+  behaviour written down beside it.** A behaviour-preserving port cannot fix a geometry bug
+  without moving windows on screen, but it must not launder one either. The test asserts what
+  the code *does*, the comment says what it *should* do and why the fix was declined, and a
+  future fix then arrives as a failing assertion with its reasoning attached rather than as a
+  silent change in layout.
+- **Verify every test by mutation, and treat a survivor as a finding rather than a chore.**
+  ANV-33 ran 46 mutations; seven survived the first pass. Four were real gaps and were fixed.
+  **Three were equivalent mutants — the mutated line changed no result — and each was a fact
+  worth recording in the source**: a ring filter in a spiral search that is a performance
+  bound and not a correctness one, an `overflow ? 0 :` ternary that a `Math.max(0, …)` beside
+  it already guarantees, and an overflow-shrink branch in a reflow that its own safety net
+  re-derives. Where a mutation cannot be killed, say so at the line and say why, so the next
+  reader does not delete the wrong half of a redundant pair.
 
 ### Frontend test harness (ANV-23)
 
