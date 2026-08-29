@@ -5,6 +5,16 @@
 ``app/utils/``. It imports no framework, reads no settings, and touches no database; the
 service layer decides *whose* password this is and where the hash is stored.
 
+**Why the ``bcrypt`` package directly (ANV-42).** This used to go through
+``passlib.context.CryptContext``. passlib 1.7.4 is its final release (October 2020) and
+cannot work with a current bcrypt: it probes its backend at first use by hashing a
+>72-byte secret, which bcrypt 5.0 turned from a silent truncation into a ``ValueError``,
+and it reads ``bcrypt.__about__``, which 4.1 removed. Keeping passlib meant pinning
+``bcrypt>=4.0,<4.1`` — freezing a security library on a 2022 release. Calling ``bcrypt``
+directly is about fifteen lines and lets it track its maintained line. The stored format
+is unchanged standard ``$2b$`` bcrypt, so every hash written by the passlib path still
+verifies here (``tests/unit/test_security.py`` pins a real one).
+
 **The 72-byte boundary.** bcrypt hashes at most 72 bytes of the secret and ignores the
 rest, so ``"a" * 72`` and ``"a" * 200`` are the *same credential* — a user who sets a long
 passphrase can sign in with any prefix of it, which is a silent downgrade nobody would
@@ -30,14 +40,23 @@ from __future__ import annotations
 
 from typing import Final
 
-from passlib.context import CryptContext
+import bcrypt
 
 #: bcrypt's hard limit. Anything past this byte is not part of the credential.
 BCRYPT_MAX_PASSWORD_BYTES: Final[int] = 72
 
-#: ``deprecated="auto"`` costs nothing today and is what lets a second scheme be added
-#: later: existing bcrypt hashes keep verifying while new ones use the new default.
-_password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+#: Cost factor (log2 of the rounds), chosen here rather than inherited from whatever
+#: ``bcrypt.gensalt()`` happens to default to, so an upstream change cannot silently move
+#: our work factor in either direction. 12 is what passlib's context used before ANV-42,
+#: which keeps login latency and the security margin identical across the swap — roughly a
+#: quarter of a second per hash on current hardware, slow enough to hurt an offline attack
+#: and fast enough for a login request. Raising it is a deliberate future change: old
+#: hashes carry their own cost in the string and keep verifying.
+BCRYPT_COST_FACTOR: Final[int] = 12
+
+#: bcrypt works in bytes; this module's public API is ``str``. Encode and decode at the
+#: boundary and nowhere else, so the stored hash stays a ``str``.
+_ENCODING: Final[str] = "utf-8"
 
 
 class PasswordTooLongError(ValueError):
@@ -46,12 +65,15 @@ class PasswordTooLongError(ValueError):
     A ``ValueError`` and not a domain error on purpose: ``app/utils/`` has no Anvex
     meaning and must not import ``app.domain``. The service layer translates it — and at
     the HTTP edge ANV-8's schema has usually rejected the value long before.
+
+    Raised by :func:`hash_password` in place of the ``ValueError`` bcrypt 5.x raises for
+    the same condition, so callers keep the one exception type they already handle.
     """
 
 
 def password_byte_length(password: str) -> int:
     """UTF-8 length of ``password`` — the unit bcrypt actually counts in."""
-    return len(password.encode("utf-8"))
+    return len(password.encode(_ENCODING))
 
 
 def exceeds_bcrypt_limit(password: str) -> bool:
@@ -71,7 +93,8 @@ def hash_password(password: str) -> str:
             f"password is {password_byte_length(password)} bytes; bcrypt hashes at most "
             f"{BCRYPT_MAX_PASSWORD_BYTES} and would silently ignore the rest."
         )
-    return _password_context.hash(password)
+    salt = bcrypt.gensalt(rounds=BCRYPT_COST_FACTOR)
+    return bcrypt.hashpw(password.encode(_ENCODING), salt).decode("ascii")
 
 
 def verify_password(password: str, hashed_password: str | None) -> bool:
@@ -83,25 +106,28 @@ def verify_password(password: str, hashed_password: str | None) -> bool:
     rejected without consulting bcrypt at all — :func:`hash_password` refuses to create
     such a hash, so no over-long password can ever be the right answer.
 
-    The comparison itself is passlib's, which is constant-time with respect to the
-    digest; the early returns above depend only on the *stored* value and the candidate's
-    length, never on how much of a real hash matched.
+    The comparison itself is :func:`bcrypt.checkpw`, which is constant-time with respect
+    to the digest; the early returns above depend only on the *stored* value and the
+    candidate's length, never on how much of a real hash matched.
     """
     if not hashed_password:
         return False
     if exceeds_bcrypt_limit(password):
         return False
     try:
-        return _password_context.verify(password, hashed_password)
+        return bcrypt.checkpw(password.encode(_ENCODING), hashed_password.encode(_ENCODING))
     except (ValueError, TypeError):
-        # passlib raises `UnknownHashError` (a `ValueError`) for an unrecognised string
-        # and a plain `ValueError` for a structurally broken bcrypt hash. Deliberately
-        # not a bare `except Exception`: a missing bcrypt backend is a deployment fault
-        # and must stay loud rather than turning every login into "wrong password".
+        # bcrypt raises `ValueError("Invalid salt")` for a string it cannot parse as a
+        # bcrypt hash — an unknown scheme, a truncated digest, a bad cost — and a
+        # `TypeError` for a non-`str` stored value that slipped past the annotation.
+        # Deliberately not a bare `except Exception`: a broken bcrypt install is a
+        # deployment fault and must stay loud rather than turning every login into
+        # "wrong password".
         return False
 
 
 __all__ = [
+    "BCRYPT_COST_FACTOR",
     "BCRYPT_MAX_PASSWORD_BYTES",
     "PasswordTooLongError",
     "exceeds_bcrypt_limit",

@@ -334,6 +334,8 @@ authorization is not data access.
   (a write we control — never persist a credential silently equal to its own prefix);
   `verify_password` **returns `False`** and never raises, for an over-long candidate and for a
   stored hash that is empty, foreign or corrupted. A broken hash fails one login, not the process.
+  It calls the `bcrypt` package directly and states its cost factor (`BCRYPT_COST_FACTOR = 12`)
+  rather than inheriting a library default, so an upstream change cannot move our work factor.
 - **Lists return `Page[T]`, never a bare array.** `app.schemas.pagination.Page` is the one envelope:
   `{items, total, limit, offset, has_more}`, offset paging, `limit` bounded by `MAX_PAGE_LIMIT`.
   `total` counts every matching row, `has_more` is computed, and the two bounds are echoed so the
