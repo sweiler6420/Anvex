@@ -75,11 +75,12 @@ modified. What each contributes to Anvex:
 | ANV-16 | Politicians seed data, service and routes | **Done** — *E4 Core features complete* |
 | ANV-17 | Client base | **Done** |
 | ANV-18 | AlphaVantage client | **Done** |
-| ANV-19 | NewsAPI client, service and routes | Next |
-| ANV-20 … ANV-41 | see `backlog.md` | Not started |
+| ANV-19 | NewsAPI client, service and routes | **Done** |
+| ANV-20 | S3 client and storage service | Next |
+| ANV-21 … ANV-41 | see `backlog.md` | Not started |
 
-**1,980 tests** passing with `db-test` up (1,715 with it stopped, DB tier skipping), 99% coverage.
-`ruff check` and `ruff format --check` are both clean across all 142 files.
+**2,261 tests** passing with `db-test` up (1,996 with it stopped, DB tier skipping), 99% coverage.
+`ruff check` and `ruff format --check` are both clean across all 152 files.
 
 ---
 
@@ -88,13 +89,24 @@ modified. What each contributes to Anvex:
 Only what is still outstanding. Once a ticket consumes one of these, delete it — the full record
 stays in [`ticket-log.md`](./ticket-log.md).
 
-**For ANV-19 (NewsAPI) specifically:**
-- The subclass shape is unchanged. NewsAPI names its key `apiKey` in the query **and** accepts an
-  `X-Api-Key` header; both are covered by ANV-17's two-test redaction.
-- **If NewsAPI also needs a body-level failure check, that is the *second* caller** — the moment to
-  lift `_check_payload` onto the base. ANV-18 deliberately did not, because a hook with one caller
-  has its shape fixed by a single example. `BaseHTTPClient._error(attempts=None)` already exists to
-  raise through, so a body-detected failure is byte-identical to a transport-detected one.
+**For ANV-20 (S3):**
+- **`BaseHTTPClient` is HTTP transport and you are not on it.** An SDK-reached vendor shares the
+  *error and logging* contract but not the transport. `ExternalServiceError` with a `reason` in
+  `details` is the contract; the `Failure` enum in `app/clients/base.py` is HTTP-shaped, so decide
+  deliberately whether to reuse its members or name S3's own.
+- **The AST sweep globs the package**, so it already covers your module — including the
+  `app.schemas` ban. Define your return models in `app/clients/s3.py`.
+- **Reuse the not-configured pre-flight pattern, do not re-derive it:** check the credential
+  *before* the call, raise `ExternalServiceError` **directly** (not via `_error`, which needs a
+  `Failure` describing how a call went wrong — no call was made), with
+  `details = {"reason": "not_configured", "setting": "<ENV_VAR>"}`. S3 has real local defaults
+  (MinIO), so it may not need this — but this is the shape if it can be unconfigured.
+- **The client-lifetime question is open and yours if you want it.** `app/deps/news.py` builds and
+  closes a client per request, giving up cross-request pooling. `aioboto3` has the same shape of
+  question and would be the second caller — that is when a lifespan-owned, worker-shareable client
+  becomes knowable. Only the dep factory has to change.
+- `tests/helpers.FakeNewsApiClient` + `make_article` are the precedent for faking a client: record
+  the calls, raise real `ExternalServiceError`s, **never return `None` on failure**.
 
 **For ANV-22 (ingest) — what ANV-18 deliberately left you:**
 - You receive `IntradaySeries` carrying `timezone` (e.g. `"US/Eastern"`) and a tuple of

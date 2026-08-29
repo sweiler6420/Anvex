@@ -864,3 +864,58 @@ stop the worker); and `df.append()`, removed in pandas 2, so the old code would 
 
 All test payloads are **hand-built** from AlphaVantage's documented response shape — no captured
 traffic, no key configured, and `mock_http` refuses to let a request escape.
+
+### ANV-19 — Done
+Commit `700c386`, 15 files. **Verified independently:** `2261 passed / 5 skipped` with `db-test` up,
+`1996 passed / 270 skipped` with it stopped, ruff clean across 152 files, **100% coverage on all six
+new modules**.
+
+**Security check passed.** The old repo's live NewsAPI key appears **nowhere in Anvex** — not in the
+working tree and not in git history (`git log -S` finds nothing). No 32-hex literal in the new
+client or its tests. All fixtures are hand-built from the documented response shape.
+
+**The key travels in an `X-Api-Key` header, not `apiKey=` in the query.** The base logs a redacted
+URL and logs **no headers at all** — so a query key is protected by redaction while a header key is
+never written down. Redaction is good; absence is better, and a URL escapes through proxy logs,
+`Referer` and quoted request lines in ways a header does not. AlphaVantage gives no choice; NewsAPI
+does.
+
+**It declined to lift `_check_payload` onto the base, and the reasoning is worth keeping.** The
+genuinely common part had *already* been lifted — ANV-18's `_error(attempts=None)` owns the message
+templates, `details` keys and the 502 contract, which is why a body-detected rate limit is
+indistinguishable from a 429 (asserted: same message, code, reason and service; the only differences
+are keys that genuinely do not exist when nothing was retried). What remains differs in **kind**:
+AlphaVantage tests *presence of a top-level key* and must scope to the top level; NewsAPI tests the
+*value of a required field* and then needs a second `code → Failure` lookup with no AlphaVantage
+analogue. A `payload -> Failure | None` hook expresses both only by being empty enough to express
+anything. And placement forces a question neither vendor answers alike: inside `request_json` it
+implies body failures re-enter the retry loop, silently overturning ANV-18's asserted "the call is
+not repeated"; after the loop it is a second traversal of a payload the parser already walks, to
+save one `raise`. **The base was not modified at all.** Generalisation is deferred to a third vendor.
+
+**Unknown ticker → 404, resolved against `StockRepo` first — and the third reason is the good one.**
+(1) `everything?q="ZZZZ"` returns `totalResults: 0`, byte-identical to a real company nobody wrote
+about, so only the local table distinguishes a typo from a quiet week. (2) It costs no vendor quota.
+(3) **The stocks row carries the company name**, so the query becomes
+`q="CAT" OR "Caterpillar Inc."` instead of `q="CAT"` — which returns articles about cats. Resolving
+is not a precondition of the good query; it *is* the good query.
+
+**Missing key → a pre-flight 502 that names itself.** `_require_key()` refuses **before building a
+request** (zero HTTP calls, asserted) with
+`details = {"reason": "not_configured", "setting": "NEWSAPI_API_KEY"}` — deliberately not through
+`_error`, because every `Failure` member describes how a *call* went wrong and no call was made. A
+keyless call would otherwise burn a round trip and surface as `client_error`, indistinguishable from
+a malformed query.
+
+**Dedupe is real work, not ceremony.** URL identity normalises scheme/host, drops `www.` and
+tracking params, sorts the rest — but does **not** fold path case. Title identity strips the
+trailing masthead, first by exact `source.name` and then heuristically (≤4 capitalised words), so
+`"Markets today - stocks rise"` survives while `"… - Reuters"` does not. Ranking is
+`0.75·recency + 0.25·completeness` under a total order, so shuffling the input cannot change the
+output (asserted over 10 shuffles) — which is what stops a paged endpoint repeating or skipping
+items. **Ranking runs before dedupe**, so the survivor of a group is its best member rather than
+whichever the vendor happened to list first.
+
+**One correction to a carry-over:** NewsAPI's `maximumResultsReached` is mapped to `client_error`,
+**not** `rate_limited` — it means the requested page is past the plan's hard ceiling and will be
+refused at any hour, so rescheduling it would be an infinite loop rather than a retry.
