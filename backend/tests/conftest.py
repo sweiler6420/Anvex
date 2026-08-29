@@ -7,9 +7,10 @@ parallel set of database fixtures. Supporting plumbing sits beside it:
 
 The three tiers (``CLAUDE.md`` §6) and what each may touch:
 
-* ``tests/unit/`` — pure domain and utils. **No fixtures, no I/O.** The fast tier.
-* ``tests/api/`` — route contracts through ``client``; services stubbed with
-  ``app.dependency_overrides``. No database.
+* ``tests/unit/`` — pure domain and utils, plus service logic driven against the in-memory
+  fakes in :mod:`tests.helpers`. **No fixtures, no I/O.** The fast tier.
+* ``tests/api/`` — route contracts through ``client``; the resource's ``get_x_service``
+  redirected with ``app.dependency_overrides``. No database.
 * ``tests/integration/`` — repos and services against real Postgres via ``db_session``;
   clients against mocked HTTP via ``mock_http``.
 

@@ -13,8 +13,12 @@ with the resource module owning its own ``prefix="/auth"`` and ``tags``.
 
 from fastapi import APIRouter
 
+from app.api.v1 import auth
+
 router = APIRouter(prefix="/v1")
 
-# Resource routers are included here as they land. Intentionally empty at ANV-4.
+# Resource routers are included here as they land, in the order they should read in the
+# generated docs. Each module owns its own `prefix` and `tags`.
+router.include_router(auth.router)
 
 __all__ = ["router"]

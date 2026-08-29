@@ -17,7 +17,9 @@ Three rules hold across all of them:
 """
 
 from app.schemas.auth import (
+    RECOVERY_MESSAGE,
     TOKEN_TYPE,
+    RecoveryAccepted,
     RecoveryRequest,
     RefreshRequest,
     TokenPair,
@@ -45,6 +47,7 @@ from app.schemas.watchlist import (
 __all__ = [
     "DEFAULT_PAGE_LIMIT",
     "MAX_PAGE_LIMIT",
+    "RECOVERY_MESSAGE",
     "TOKEN_TYPE",
     "ErrorBody",
     "ErrorResponse",
@@ -54,6 +57,7 @@ __all__ = [
     "PoliticianCreate",
     "PoliticianOut",
     "ReadinessOut",
+    "RecoveryAccepted",
     "RecoveryRequest",
     "RefreshRequest",
     "StockCreate",

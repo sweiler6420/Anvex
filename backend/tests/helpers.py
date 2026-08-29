@@ -5,20 +5,26 @@ contract, and every ticket from ANV-11 onward asserts it, so the keys are spelle
 exactly one place: if the envelope ever changes, one constant changes and every test that
 depends on it fails loudly rather than drifting.
 
-Also home to :class:`StubSession`, because "override ``get_session`` with something that
-does not touch Postgres" is what an ``tests/api/`` test does whenever the route it is
-contract-testing happens to take a session.
+Also home to the fakes that let a layer be tested without the layer below it:
+:class:`StubSession`, because "override ``get_session`` with something that does not touch
+Postgres" is what a ``tests/api/`` test does whenever the route it is contract-testing
+happens to take a session; and :class:`FakeUserRepo` plus :func:`make_user`, because a
+service's own logic is worth testing at unit speed against an in-memory repo rather than
+only through a database.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import uuid
+from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import FastAPI
 from httpx import Response
 
 from app.deps.session import get_session
+from app.models import User
 
 #: Every key ``app.schemas.errors.ErrorResponse`` promises, always present.
 ERROR_BODY_KEYS = frozenset({"code", "message", "details", "request_id"})
@@ -102,9 +108,84 @@ def override_session(app: FastAPI, session: StubSession | None = None) -> StubSe
     return stub
 
 
+class FakeUserRepo:
+    """An in-memory stand-in for :class:`app.repos.user.UserRepo`.
+
+    Lets a service be exercised for real — its branches, its error semantics, the tokens it
+    actually mints — with no Postgres anywhere, which is what keeps the service tests in the
+    fast tier and keeps them running with Docker stopped.
+
+    It implements only the lookups a service calls, and it deliberately re-implements the
+    *behaviour* of the real queries rather than pretending to be them: the login lookup
+    matches email **or** username, exactly as ``get_by_email_or_username``'s single ``OR``
+    statement does. Anything asserting what the SQL *did* belongs in ``tests/integration/``
+    against a real database.
+
+    ``calls`` records ``(method, argument)`` in order, so a test can assert that (say)
+    refresh really re-read the account rather than trusting the token's claims.
+    """
+
+    def __init__(self, *users: User) -> None:
+        self.users: list[User] = list(users)
+        self.calls: list[tuple[str, Any]] = []
+
+    def add(self, user: User) -> User:
+        self.users.append(user)
+        return user
+
+    def remove(self, user: User) -> None:
+        """Delete an account, for the "the token outlived its user" tests."""
+        self.users = [candidate for candidate in self.users if candidate is not user]
+
+    async def get_by_id(self, session: Any, user_id: uuid.UUID) -> User | None:
+        self.calls.append(("get_by_id", user_id))
+        return self._first(lambda user: user.user_id == user_id)
+
+    async def get_by_username(self, session: Any, username: str) -> User | None:
+        self.calls.append(("get_by_username", username))
+        return self._first(lambda user: user.username == username)
+
+    async def get_by_email(self, session: Any, email: str) -> User | None:
+        self.calls.append(("get_by_email", email))
+        return self._first(lambda user: user.email == email)
+
+    async def get_by_email_or_username(self, session: Any, identifier: str) -> User | None:
+        self.calls.append(("get_by_email_or_username", identifier))
+        return self._first(
+            lambda user: identifier in (user.email, user.username),
+        )
+
+    def _first(self, predicate: Callable[[User], bool]) -> User | None:
+        return next((user for user in self.users if predicate(user)), None)
+
+
+def make_user(
+    *,
+    username: str = "testuser",
+    email: str = "test@example.com",
+    password_hash: str = "",
+    user_id: uuid.UUID | None = None,
+) -> User:
+    """Build a detached :class:`~app.models.User` for a fake repo.
+
+    Not :class:`tests.factories.UserFactory`: that one flushes to a session, which is the
+    whole thing these tests are avoiding. ``user_id`` and ``created_at`` are normally server
+    defaults, so they are filled in here — a detached instance never sees Postgres.
+    """
+    return User(
+        user_id=user_id or uuid.uuid4(),
+        username=username,
+        email=email,
+        password=password_hash,
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+
+
 __all__ = [
     "ERROR_BODY_KEYS",
+    "FakeUserRepo",
     "StubSession",
     "assert_error_envelope",
+    "make_user",
     "override_session",
 ]

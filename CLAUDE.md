@@ -208,6 +208,43 @@ normalization, password hashing primitives. If a helper mentions a Anvex concept
 
 Note that steps 5 and 6 both reuse step 4. **That reuse is the whole reason for the layering.**
 
+### The service / dependency / handler shape
+
+Established by `app/services/auth.py`, `app/deps/auth.py` and `app/api/v1/auth.py` (ANV-11).
+**Every resource after it is written to this shape**; if a new one deviates, it is the new one
+that is wrong.
+
+**A service** is a class named `XService` in `app/services/x.py`, constructed with its
+collaborators and never with a request:
+
+```python
+class XService:
+    def __init__(self, session: AsyncSession, settings: Settings, *, xs: XRepo = x_repo) -> None:
+```
+
+Repos arrive as keyword arguments defaulting to the module-level singletons — that default is
+what lets a unit test pass an in-memory fake and never reach Postgres. One `async` method per
+use case, keyword-only arguments, returning a **schema** (or a model another service consumes);
+never an ORM row straight to the API. It raises `app.domain.errors` exceptions and owns the
+`commit()`. It is also the **only** layer allowed to read a clock (`datetime.now(UTC)`, once at
+the top of a method, passed down) or to unwrap a `SecretStr` (`.get_secret_value()`).
+
+**A dependency** wires and nothing else. `app/deps/x.py` exports a `get_x_service` factory that
+resolves `get_session` + `get_settings_dep` and constructs the service, plus an
+`XServiceDep = Annotated[XService, Depends(get_x_service)]` alias. That factory is the **one
+seam** an API test overrides, which is why every resource has exactly one. Logic that looks like
+it belongs in a dependency (decode this token, then load that user) belongs in the service, so a
+Celery task can do it too — `get_current_user` is four lines and delegates.
+
+**A handler** accepts a validated request, calls **one** service method, returns a schema. No
+`try`, no `if`, no session, no `HTTPException` — the middleware maps the domain error. Over ~15
+lines means logic leaked in. The resource module owns `prefix="/x"` and `tags`; `app/api/v1/
+__init__.py` adds the two-line include.
+
+**Protected routes** annotate `user: CurrentUser` (from `app/deps/`). Ownership is checked in the
+service against `user.user_id` — repos deliberately provide no "owned by" query, because
+authorization is not data access.
+
 ---
 
 ## 4. Backend conventions
@@ -269,6 +306,18 @@ Note that steps 5 and 6 both reuse step 4. **That reuse is the whole reason for 
   `token_expired`, `wrong_token_type` — so a client refreshes on expiry and re-authenticates
   otherwise, while *why* a signature failed stays unsaid. **When a rule must not be forgotten,
   make the signature require it.**
+- **`OAuth2PasswordBearer`'s `tokenUrl` must name the route that actually exists.** It is the
+  only thing pointing Swagger's *Authorize* button at the login endpoint, nothing validates it,
+  and a wrong value fails silently as a /docs page that cannot sign in. It lives as `TOKEN_URL`
+  in `app/deps/auth.py` (`"v1/auth/login"` — relative, as OpenAPI wants) and a test asserts it
+  equals the mounted path.
+- **An endpoint keyed on an unauthenticated identifier answers identically whether or not that
+  identifier exists.** Same status, same code, same message, same `details` — and the same work,
+  so response *time* does not answer the question either (`AuthService.login` hashes against a
+  decoy digest on the miss path). This covers login, password recovery, and any future
+  "is this taken" probe reachable without a token. Both the old `/v1/login` and the old
+  `/v1/recovery` failed this: recovery answered 404 with the username echoed back, which made it
+  a free enumeration API.
 - **Domain takes the clock as a parameter.** No module under `app/domain/` reads the clock, and
   every function that needs the time takes `now` as a required keyword-only, **timezone-aware**
   datetime (a naive one is a `ValueError`: `.timestamp()` would silently resolve it in the server's
@@ -353,8 +402,10 @@ frontend/src/
 - `pytest`, `pytest-asyncio` (`asyncio_mode = "auto"`), `httpx.AsyncClient` +
   `ASGITransport` for API tests. Coverage via `pytest-cov`.
 - Layout mirrors the app:
-  - `tests/unit/` — **domain and utils. Pure, fast, no fixtures, no I/O.** This is where the bulk
-    of the tests live. Cover the edge cases here, not through the API.
+  - `tests/unit/` — **domain, utils, and service logic against in-memory fakes. Pure, fast, no
+    fixtures, no I/O.** This is where the bulk of the tests live. Cover the edge cases here, not
+    through the API. A service test belongs here when a fake repo answers the question and in
+    `tests/integration/` when only real SQL can.
   - `tests/integration/` — repos and services against a real Postgres (compose `db-test`), each
     test in a rolled-back transaction. Clients are tested with `respx`-mocked HTTP; never hit a
     live vendor API in a test.
@@ -385,7 +436,8 @@ migrates `db-test`), `tests/helpers.py` (shared assertions and stubs), `tests/fa
 | `db_app` / `db_client` | function | `app` / `client` with `deps.get_session` resolved to `db_session` |
 | `throwaway_database_url` | function | a brand-new empty database, dropped afterwards |
 
-- **What each tier may touch.** `tests/unit/` — nothing (no fixtures, no I/O). `tests/api/` —
+- **What each tier may touch.** `tests/unit/` — nothing but fakes (no fixtures, no I/O).
+  `tests/api/` —
   `client` plus `app.dependency_overrides`; never a database. `tests/integration/` — `db_session`
   for repos and services, `mock_http` for clients.
 - **Isolation survives `commit()`.** `db_connection` never commits its transaction and `db_session`
@@ -407,6 +459,13 @@ migrates `db-test`), `tests/helpers.py` (shared assertions and stubs), `tests/fa
 - **Assert error bodies with `assert_error_envelope`** from `tests/helpers.py`, and keep a
   session-taking route off Postgres with `override_session(app, StubSession(...))` from the same
   module. `ERROR_BODY_KEYS` is defined there once.
+- **An API test overrides the resource's `get_x_service`, and nothing else.** Point it at a real
+  service built on an in-memory repo (`tests.helpers.FakeUserRepo`, `make_user`) rather than a
+  hand-written stub of the service itself: the route, the middleware, the error envelope and the
+  service's own branches are then all genuinely under test, with no database and no skip. Stub the
+  service only when the test is about the handler's plumbing rather than the behaviour behind it.
+  A module-local `app` fixture that installs the override (and, where the tier needs one, a probe
+  route behind `CurrentUser`) is the idiom — extend `app`/`settings` by name, per the table above.
 - **Factories:** one `Factory` subclass per model in `tests/factories/`, `@register`ed and
   re-exported from `tests/factories/__init__.py` so tests write `from tests.factories import
   UserFactory`. Unique columns come from `self.sequence()`, never from faker (seeding resets per

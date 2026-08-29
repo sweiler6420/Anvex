@@ -39,6 +39,13 @@ TokenType = Literal["access", "refresh"]
 #: The scheme name in the ``Authorization`` header the client must build from this pair.
 TOKEN_TYPE = "bearer"
 
+#: The single sentence ``POST /v1/auth/recovery`` returns, for every request. Deliberately
+#: phrased in the conditional — it makes no claim about whether an account was found, and
+#: no claim that anything has actually been sent.
+RECOVERY_MESSAGE = (
+    "If an account matches that username, a password reset will be arranged for it."
+)
+
 
 class TokenPair(BaseModel):
     """The body of a successful ``/v1/login`` or ``/v1/refresh``.
@@ -99,8 +106,35 @@ class RecoveryRequest(BaseModel):
     )
 
 
+class RecoveryAccepted(BaseModel):
+    """The body of ``POST /v1/auth/recovery`` — **always this, whoever asked**.
+
+    A fixed response with no caller-controlled fields, because the one thing this endpoint
+    must never do is tell an anonymous caller whether a username exists. The old API
+    answered 404 ``"User not found with username: <x>"``, which made password recovery a
+    free enumeration API; here the existing and non-existing cases are byte-identical and
+    only the server-side log tells them apart.
+
+    ``accepted``, not ``sent``: nothing is delivered today (see
+    :meth:`app.services.auth.AuthService.recovery` — Anvex has no mail client yet) and the
+    wording must not promise an email that is not coming. It stays accurate once one lands,
+    since delivery is asynchronous either way.
+    """
+
+    status: Literal["accepted"] = Field(
+        default="accepted",
+        description="Always `accepted`. Never reveals whether the account exists.",
+    )
+    message: str = Field(
+        default=RECOVERY_MESSAGE,
+        description="Fixed text, identical for every request.",
+    )
+
+
 __all__ = [
+    "RECOVERY_MESSAGE",
     "TOKEN_TYPE",
+    "RecoveryAccepted",
     "RecoveryRequest",
     "RefreshRequest",
     "TokenPair",
