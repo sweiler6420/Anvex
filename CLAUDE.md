@@ -331,6 +331,34 @@ authorization is not data access.
   else" is not that. The rule applies to every owned resource (`GET /v1/users/{user_id}` today,
   watchlists next), and it is the other half of why a repo provides no "owned by" query:
   authorization is a service rule, and the shape of the refusal is part of that rule.
+  Where the owner cannot be known without reading the row, "without querying" means **without
+  querying the child**: fetch the parent alone (no eager load), compare, refuse — so a refusal
+  never does work proportional to the size of a collection the caller may not see.
+- **An owned resource's service has exactly one ownership gate, and every use case goes through
+  it.** One private `async _resolve_owned(id, owner) -> Model` that fetches, compares
+  `user_id` and raises the 404 above, returning the row so its callers have no reason to fetch
+  it again. Not a `WHERE user_id = …` repeated per method, and not a FastAPI dependency: the
+  defect ANV-15 fixed was one handler in a file of four having the clause and the others not,
+  which is invisible in review and impossible to test for. A gate is a single call every method
+  must make, so "does this endpoint check ownership" becomes one question instead of *n*.
+  Its test is likewise one **parameterised sweep** over every use case, and the sweep's list of
+  use cases is *derived from the service's public surface* (`vars(XService)`, minus a named
+  exempt set) and asserted complete — so a use case added without an isolation test fails the
+  suite rather than quietly going unchecked. Each case asserts three things: the status is 404
+  and not 403; the body is identical to the body for an id that never existed; and no repo
+  method beyond the gate's own lookup was reached.
+- **A user-ordered collection stores a dense `0..n-1` `position`, and every mutation renumbers
+  the whole list.** Append, insert, move and remove each take the current `{id: position}` map
+  and return a complete new one, in `app/domain/<aggregate>.py`; the service applies it with a
+  single `set_positions`. Renumbering totally rather than patching the rows that "should" have
+  changed is what makes the rule correct when the stored ordinals have drifted — and they can,
+  because `position` carries no unique constraint (a swap's intermediate state has to be legal)
+  and nothing renumbers behind a caller's back. Two consequences: the move is keyed on the
+  **entity id**, never on a client-supplied "current index", because the server knows where the
+  row is and the client's belief is stale by construction; and an out-of-range destination is a
+  422, never a clamp — clamping reproduces the old bug's shape, where a nonsense index produced
+  a plausible-looking success. `(max_position or -1) + 1` is **not** the append rule: `0` is
+  falsy, so it appends the second item on top of the first. Test `is None`.
 - **A uniqueness pre-check is for the *message*; the unique index is for the *correctness*.**
   `email_exists`-style checks exist so a duplicate becomes a 409 naming the field a form has to
   fix (`details.field`), never so the insert may assume it is safe — two requests can both pass

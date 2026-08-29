@@ -173,8 +173,12 @@ class WatchlistRepo(BaseRepo[Watchlist]):
 
         ``None`` rather than ``-1``: "there is no last position" is a different statement
         from "the last position is minus one", and inventing the latter would bake the
-        0-based convention into the repo. Appending is ``(max_position or -1) + 1`` — a
-        rule, and rules live in ``app/domain/``.
+        0-based convention into the repo. Appending is a rule, and rules live in
+        ``app/domain/``: :func:`app.domain.watchlist.next_position`.
+
+        This docstring used to spell that rule ``(max_position or -1) + 1``. **It is not**,
+        and ANV-15 corrected it: ``0`` is falsy, so that expression appends the second stock
+        of a watchlist on top of the first. The rule tests ``is None``.
         """
         return await session.scalar(
             select(func.max(WatchlistData.position)).where(

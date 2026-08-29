@@ -9,9 +9,9 @@ Also home to the fakes that let a layer be tested without the layer below it:
 :class:`StubSession`, because "override ``get_session`` with something that does not touch
 Postgres" is what a ``tests/api/`` test does whenever the route it is contract-testing
 happens to take a session; and the ``FakeXRepo`` / ``make_x`` pairs
-(:class:`FakeUserRepo`, :class:`FakeStockRepo`, :class:`FakeStockDataRepo`), because a
-service's own logic is worth testing at unit speed against an in-memory repo rather than
-only through a database.
+(:class:`FakeUserRepo`, :class:`FakeStockRepo`, :class:`FakeStockDataRepo`,
+:class:`FakeWatchlistRepo`), because a service's own logic is worth testing at unit speed
+against an in-memory repo rather than only through a database.
 
 **The fakes live here, together.** Each new resource adds its pair beside the existing ones
 rather than starting a module-local set, so an API test can build one object graph shared
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import itertools
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Any
@@ -32,7 +32,8 @@ from fastapi import FastAPI
 from httpx import Response
 
 from app.deps.session import get_session
-from app.models import Stock, StockData, User
+from app.models import Stock, StockData, User, Watchlist, WatchlistData
+from app.models.watchlist import DEFAULT_TITLE
 
 #: Every key ``app.schemas.errors.ErrorResponse`` promises, always present.
 ERROR_BODY_KEYS = frozenset({"code", "message", "details", "request_id"})
@@ -355,6 +356,245 @@ class FakeStockDataRepo:
         return matched[offset : offset + limit], len(matched)
 
 
+class FakeWatchlistRepo:
+    """An in-memory stand-in for :class:`app.repos.watchlist.WatchlistRepo`.
+
+    Same idea and the same discipline as :class:`FakeStockRepo`: it re-implements the
+    *behaviour* of the real queries rather than pretending to be them, and it implements
+    only the methods :class:`app.services.watchlist.WatchlistService` actually calls.
+
+    Four behaviours are load-bearing and deliberately faithful — a forgiving fake would
+    silently pass the very bugs ANV-15 exists to fix:
+
+    * :meth:`get_by_id` **does not filter by owner**, because the real query does not: the
+      repo layer provides no "owned by user" lookup on purpose (``CLAUDE.md`` §3), so a
+      service that forgot to compare ``user_id`` gets somebody else's watchlist here exactly
+      as it would in production.
+    * :meth:`get_by_id` returns the row with :attr:`~app.models.Watchlist.entries` **empty**,
+      and only :meth:`get_with_entries` populates it. The real ``get_by_id`` does not
+      eager-load, and touching a lazy collection under asyncio raises ``MissingGreenlet``
+      rather than returning ``[]`` — a detached ORM instance cannot reproduce that, so the
+      fake reproduces the *observable* half instead: a service that served detail out of
+      ``get_by_id`` renders an empty watchlist and its test fails.
+    * :meth:`max_position` answers ``None`` for an empty watchlist rather than ``-1``, which
+      is the whole reason :func:`app.domain.watchlist.next_position` exists.
+    * :meth:`set_positions` ignores stock ids that are not on the watchlist and returns the
+      number of rows whose position actually **changed**, both as documented on the real
+      method — so "did the reorder rewrite anything" is assertable at unit speed.
+
+    ``calls`` records ``(method, argument)`` in order, which is how the ownership tests pin
+    the refusal at the boundary: another user's request must never reach ``list_entries`` or
+    ``get_with_entries`` at all, not merely fail to return their result.
+    """
+
+    def __init__(
+        self,
+        *watchlists: Watchlist,
+        entries: Sequence[WatchlistData] = (),
+        catalogue: Sequence[Stock] = (),
+    ) -> None:
+        self.watchlists: list[Watchlist] = list(watchlists)
+        self.entries: list[WatchlistData] = list(entries)
+        #: The securities :meth:`add_entry` can attach to a row it creates. In production
+        #: ``WatchlistData.stock`` is populated by the ``selectinload`` chain on
+        #: ``get_with_entries``; a detached instance has no session to load it from, so the
+        #: fake needs to be told which stocks exist. Only ids that appear here come back
+        #: with a stock, which is faithful: a row referencing a security that is not in the
+        #: table could not exist at all (``watchlist_data.stock_id`` is a foreign key).
+        self.catalogue: list[Stock] = list(catalogue)
+        self.calls: list[tuple[str, Any]] = []
+        #: Raised (once, then cleared) by the next :meth:`add_entry`, for the race the
+        #: ``pk_watchlist_data`` primary key closes and no pre-check can.
+        self.add_entry_error: Exception | None = None
+
+    # -- watchlists ---------------------------------------------------------------------
+
+    def add(self, watchlist: Watchlist) -> Watchlist:
+        self.watchlists.append(watchlist)
+        return watchlist
+
+    async def get_by_id(self, session: Any, watchlist_id: uuid.UUID) -> Watchlist | None:
+        """The row alone, **unfiltered by owner and without its entries**."""
+        self.calls.append(("get_by_id", watchlist_id))
+        watchlist = self._find(watchlist_id)
+        if watchlist is not None:
+            watchlist.entries = []
+        return watchlist
+
+    async def get_with_entries(
+        self, session: Any, watchlist_id: uuid.UUID
+    ) -> Watchlist | None:
+        self.calls.append(("get_with_entries", watchlist_id))
+        watchlist = self._find(watchlist_id)
+        if watchlist is None:
+            return None
+        watchlist.entries = self._ordered(watchlist_id)
+        return watchlist
+
+    async def list_for_user(
+        self, session: Any, user_id: uuid.UUID, *, limit: int, offset: int = 0
+    ) -> tuple[list[Watchlist], int]:
+        self.calls.append(
+            ("list_for_user", {"user_id": user_id, "limit": limit, "offset": offset})
+        )
+        matched = [row for row in self.watchlists if row.user_id == user_id]
+        matched.sort(key=lambda row: (row.title, row.watchlist_id))
+        # `total` counts every match and is taken *before* the window is applied.
+        return matched[offset : offset + limit], len(matched)
+
+    async def create(
+        self, session: Any, *, user_id: uuid.UUID, title: str | None = None
+    ) -> Watchlist:
+        self.calls.append(("create", {"user_id": user_id, "title": title}))
+        return self.add(make_watchlist(user_id=user_id, title=title or DEFAULT_TITLE))
+
+    async def delete(self, session: Any, instance: Watchlist) -> None:
+        """Delete the watchlist and, as ``ON DELETE CASCADE`` does, everything on it."""
+        self.calls.append(("delete", instance.watchlist_id))
+        self.watchlists = [
+            row for row in self.watchlists if row.watchlist_id != instance.watchlist_id
+        ]
+        self.entries = [
+            entry for entry in self.entries if entry.watchlist_id != instance.watchlist_id
+        ]
+
+    # -- entries ------------------------------------------------------------------------
+
+    async def entry_exists(
+        self, session: Any, watchlist_id: uuid.UUID, stock_id: uuid.UUID
+    ) -> bool:
+        self.calls.append(("entry_exists", (watchlist_id, stock_id)))
+        return self._entry(watchlist_id, stock_id) is not None
+
+    async def list_entries(
+        self, session: Any, watchlist_id: uuid.UUID
+    ) -> list[WatchlistData]:
+        self.calls.append(("list_entries", watchlist_id))
+        return self._ordered(watchlist_id)
+
+    async def max_position(self, session: Any, watchlist_id: uuid.UUID) -> int | None:
+        """``None`` on an empty watchlist, never ``-1`` — see the class docstring."""
+        self.calls.append(("max_position", watchlist_id))
+        positions = [entry.position for entry in self._ordered(watchlist_id)]
+        return max(positions) if positions else None
+
+    async def add_entry(
+        self,
+        session: Any,
+        *,
+        watchlist_id: uuid.UUID,
+        stock_id: uuid.UUID,
+        position: int,
+    ) -> WatchlistData:
+        self.calls.append(
+            (
+                "add_entry",
+                {
+                    "watchlist_id": watchlist_id,
+                    "stock_id": stock_id,
+                    "position": position,
+                },
+            )
+        )
+        if self.add_entry_error is not None:
+            error, self.add_entry_error = self.add_entry_error, None
+            raise error
+        stock = next(
+            (candidate for candidate in self.catalogue if candidate.stock_id == stock_id),
+            None,
+        )
+        entry = WatchlistData(
+            watchlist_id=watchlist_id,
+            stock_id=stock_id,
+            position=position,
+            stock=stock,
+        )
+        self.entries.append(entry)
+        return entry
+
+    async def remove_entry(
+        self, session: Any, watchlist_id: uuid.UUID, stock_id: uuid.UUID
+    ) -> bool:
+        self.calls.append(("remove_entry", (watchlist_id, stock_id)))
+        entry = self._entry(watchlist_id, stock_id)
+        if entry is None:
+            return False
+        self.entries.remove(entry)
+        return True
+
+    async def set_positions(
+        self, session: Any, watchlist_id: uuid.UUID, positions: Mapping[uuid.UUID, int]
+    ) -> int:
+        self.calls.append(("set_positions", dict(positions)))
+        changed = 0
+        for entry in self._ordered(watchlist_id):
+            new_position = positions.get(entry.stock_id)
+            if new_position is not None and entry.position != new_position:
+                entry.position = new_position
+                changed += 1
+        return changed
+
+    # -- internals ----------------------------------------------------------------------
+
+    def _find(self, watchlist_id: uuid.UUID) -> Watchlist | None:
+        return next(
+            (row for row in self.watchlists if row.watchlist_id == watchlist_id), None
+        )
+
+    def _entry(
+        self, watchlist_id: uuid.UUID, stock_id: uuid.UUID
+    ) -> WatchlistData | None:
+        return next(
+            (
+                entry
+                for entry in self.entries
+                if entry.watchlist_id == watchlist_id and entry.stock_id == stock_id
+            ),
+            None,
+        )
+
+    def _ordered(self, watchlist_id: uuid.UUID) -> list[WatchlistData]:
+        """``ORDER BY position, stock_id`` — the real ``list_entries`` ordering."""
+        return sorted(
+            (entry for entry in self.entries if entry.watchlist_id == watchlist_id),
+            key=lambda entry: (entry.position, entry.stock_id),
+        )
+
+
+def make_watchlist(
+    *,
+    user_id: uuid.UUID,
+    title: str = DEFAULT_TITLE,
+    watchlist_id: uuid.UUID | None = None,
+) -> Watchlist:
+    """Build a detached :class:`~app.models.Watchlist` for :class:`FakeWatchlistRepo`.
+
+    Not :class:`tests.factories.WatchlistFactory`, which flushes to a session — the whole
+    point of the unit tier is that there is no session. ``user_id`` is required for the same
+    reason the factory requires a parent: a watchlist with an invented owner is a watchlist
+    no ownership test can reason about.
+    """
+    return Watchlist(
+        watchlist_id=watchlist_id or uuid.uuid4(), user_id=user_id, title=title
+    )
+
+
+def make_entry(*, watchlist_id: uuid.UUID, stock: Stock, position: int) -> WatchlistData:
+    """Build a detached membership row, with its :class:`~app.models.Stock` attached.
+
+    The stock is assigned rather than left to a lazy load, because
+    :class:`~app.schemas.watchlist.WatchlistEntryDetailOut` reads it and the unit tier has
+    no session to load it from — which is exactly what the repo's ``selectinload`` chain
+    provides in production.
+    """
+    return WatchlistData(
+        watchlist_id=watchlist_id,
+        stock_id=stock.stock_id,
+        position=position,
+        stock=stock,
+    )
+
+
 def make_stock(
     *,
     ticker_symbol: str = "AAPL",
@@ -445,10 +685,13 @@ __all__ = [
     "FakeStockDataRepo",
     "FakeStockRepo",
     "FakeUserRepo",
+    "FakeWatchlistRepo",
     "StubSession",
     "assert_error_envelope",
     "make_candle",
+    "make_entry",
     "make_stock",
     "make_user",
+    "make_watchlist",
     "override_session",
 ]

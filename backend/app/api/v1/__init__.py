@@ -13,7 +13,7 @@ with the resource module owning its own ``prefix="/auth"`` and ``tags``.
 
 from fastapi import APIRouter
 
-from app.api.v1 import auth, stock_data, stocks, users
+from app.api.v1 import auth, stock_data, stocks, users, watchlists
 
 router = APIRouter(prefix="/v1")
 
@@ -26,5 +26,7 @@ router.include_router(stocks.router)
 # resource, and `/stocks/by-ticker/{ticker}` therefore wins the one URL both routers could
 # claim (`/v1/stocks/by-ticker/data`, a security whose ticker is literally "data").
 router.include_router(stock_data.router)
+# Its own prefix (`/watchlists`), so it competes with nothing above it.
+router.include_router(watchlists.router)
 
 __all__ = ["router"]
