@@ -14,6 +14,12 @@ Three rules hold across all of them:
   ``stocks.isin`` and ``politicians.state``/``chamber``/``dob``/``gender``; no other output
   field is ``| None``. A defensive ``| None`` on a ``NOT NULL`` column pushes a null check
   onto every client forever, to guard against a state that cannot happen.
+
+The third rule is about *columns*, and ANV-19 added the one schema that has none:
+:class:`~app.schemas.news.NewsArticleOut` projects a vendor payload, not a row. Its
+optionality mirrors what NewsAPI actually returns instead, and its own module docstring says
+so; ``tests/unit/test_schemas.py`` scopes the nullability sweep to the ORM-backed resources
+for that reason. The first two rules hold everywhere without exception.
 """
 
 from app.schemas.auth import (
@@ -28,6 +34,7 @@ from app.schemas.auth import (
 )
 from app.schemas.errors import ErrorBody, ErrorResponse
 from app.schemas.health import HealthOut, ReadinessOut
+from app.schemas.news import NewsArticleOut
 from app.schemas.pagination import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, Page
 from app.schemas.politician import PoliticianCreate, PoliticianOut
 from app.schemas.stock import StockCreate, StockOut, StockUpdate
@@ -52,6 +59,7 @@ __all__ = [
     "ErrorBody",
     "ErrorResponse",
     "HealthOut",
+    "NewsArticleOut",
     "Page",
     "PasswordChange",
     "PoliticianCreate",

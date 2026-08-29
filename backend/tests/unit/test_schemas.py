@@ -78,7 +78,10 @@ PASSWORD_HASH = "$2b$12$THISMUSTNEVERAPPEARINANYRESPONSEBODYWHATSOEVER0123456789
 
 #: The resource modules. ``errors`` and ``health`` are framework-level bodies from ANV-4
 #: and are not built from ORM rows, so the ``from_attributes`` and nullability rules below
-#: do not apply to them.
+#: do not apply to them. Nor is ``news`` (ANV-19): it projects a NewsAPI payload rather than
+#: a row, so "the only nullable fields are the five nullable columns" is not a statement
+#: about it — a null ``description`` is a fact about the article, and
+#: ``app/schemas/news.py`` argues the case in its own docstring.
 RESOURCE_MODULES = frozenset(
     {"auth", "pagination", "politician", "stock", "stock_data", "user", "watchlist"}
 )

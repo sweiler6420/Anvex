@@ -13,7 +13,7 @@ with the resource module owning its own ``prefix="/auth"`` and ``tags``.
 
 from fastapi import APIRouter
 
-from app.api.v1 import auth, politicians, stock_data, stocks, users, watchlists
+from app.api.v1 import auth, news, politicians, stock_data, stocks, users, watchlists
 
 router = APIRouter(prefix="/v1")
 
@@ -30,5 +30,8 @@ router.include_router(stock_data.router)
 router.include_router(watchlists.router)
 # Likewise `/politicians` — reference data, read-only, filled by the seed script.
 router.include_router(politicians.router)
+# `/news` — the only router whose rows come from a third party rather than Postgres. Its own
+# prefix, so it competes with nothing above it.
+router.include_router(news.router)
 
 __all__ = ["router"]

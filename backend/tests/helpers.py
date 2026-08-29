@@ -13,6 +13,11 @@ happens to take a session; and the ``FakeXRepo`` / ``make_x`` pairs
 :class:`FakeWatchlistRepo`, :class:`FakePoliticianRepo`), because a service's own logic is
 worth testing at unit speed against an in-memory repo rather than only through a database.
 
+ANV-19 added the first fake for a **client** rather than a repo (:class:`FakeNewsApiClient`
++ :func:`make_article`), on the same argument: a service that composes a vendor call with a
+repo lookup and a domain rule has branches worth testing at unit speed, and none of them is
+about HTTP.
+
 **The fakes live here, together.** Each new resource adds its pair beside the existing ones
 rather than starting a module-local set, so an API test can build one object graph shared
 across two services — which is what made register → login → ``/me`` testable with no
@@ -26,6 +31,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import FastAPI
@@ -807,8 +813,84 @@ def make_user(
     )
 
 
+class FakeNewsApiClient:
+    """An in-memory stand-in for :class:`~app.clients.newsapi.NewsApiClient` (ANV-19).
+
+    The first fake here that replaces a **client** rather than a repo, and it is the same
+    idea for the same reason: ``NewsService``'s own branches — the ticker resolution, the
+    windowing, the ``total`` that counts distinct stories rather than the vendor's match
+    count — are worth testing at unit speed, and none of them is about HTTP.
+
+    It records the calls it was given, so a test can assert *what was asked of the vendor*
+    (the composed query is a domain rule with real content) as well as what came back. It is
+    deliberately faithful to the awkward part of the real client: a failure is an
+    ``ExternalServiceError`` raised out of the call, never a ``None`` return, because a
+    forgiving fake silently passes the bug the test exists to catch.
+    """
+
+    def __init__(
+        self,
+        *articles: Any,
+        total: int | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.articles = tuple(articles)
+        self.total = len(self.articles) if total is None else total
+        self.error = error
+        #: ``(operation, kwargs)`` for every call, in order.
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.closed = False
+
+    async def fetch_top_headlines(self, **kwargs: Any) -> Any:
+        return self._answer("top_headlines", kwargs)
+
+    async def fetch_everything(self, query: str, **kwargs: Any) -> Any:
+        return self._answer("everything", {"query": query, **kwargs})
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+    def _answer(self, operation: str, kwargs: dict[str, Any]) -> Any:
+        self.calls.append((operation, kwargs))
+        if self.error is not None:
+            raise self.error
+        return SimpleNamespace(total_results=self.total, articles=self.articles)
+
+
+def make_article(
+    *,
+    title: str | None = "A headline",
+    url: str | None = "https://example.com/a",
+    source_name: str | None = "Reuters",
+    published_at: datetime | None = None,
+    description: str | None = None,
+    content: str | None = None,
+    url_to_image: str | None = None,
+    author: str | None = None,
+) -> Any:
+    """A detached article for :class:`FakeNewsApiClient`.
+
+    A ``SimpleNamespace`` rather than
+    :class:`~app.clients.newsapi.NewsArticle`, because everything downstream of the client
+    reads it structurally — ``app.domain.news.Article`` is a ``Protocol`` and
+    ``NewsArticleOut`` is built ``from_attributes``. Using the vendor model here would test
+    pydantic rather than the service.
+    """
+    return SimpleNamespace(
+        title=title,
+        url=url,
+        source_name=source_name,
+        published_at=published_at or datetime(2026, 3, 2, 12, 0, tzinfo=UTC),
+        description=description,
+        content=content,
+        url_to_image=url_to_image,
+        author=author,
+    )
+
+
 __all__ = [
     "ERROR_BODY_KEYS",
+    "FakeNewsApiClient",
     "FakePoliticianRepo",
     "FakeStockDataRepo",
     "FakeStockRepo",
@@ -816,6 +898,7 @@ __all__ = [
     "FakeWatchlistRepo",
     "StubSession",
     "assert_error_envelope",
+    "make_article",
     "make_candle",
     "make_entry",
     "make_politician",

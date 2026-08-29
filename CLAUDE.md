@@ -153,9 +153,38 @@ return a schema. Versioned as `app/api/v1/<resource>.py`, aggregated by `app/api
   reusing the base's constructor rather than writing a message template, so a rate limit is
   indistinguishable to a consumer whether it arrived as a 429 or as a 200. `attempts` is omitted
   there, because the retry loop had already succeeded and there is no attempt count belonging to
-  that failure; a fabricated `1` would be worse than an absent key. **Do not add a base hook for
-  this until a second vendor needs one** — §4's "move on the second caller" rule applies to hooks
-  too, and a hook with one caller fixes its own shape against a single example.
+  that failure; a fabricated `1` would be worse than an absent key. **ANV-19 was the second
+  caller and still declined the base hook, after looking** — NewsAPI signals a refusal with
+  `{"status": "error", "code": …}`, at a 200 as often as at a 4xx. The genuinely shared part had
+  *already* been lifted: `_error(attempts=None)` owns the message templates, the `details` keys and
+  the 502 contract, which is why a consumer cannot tell a body-detected rate limit from a
+  transport-detected one. What remained differed in **kind**, not just in predicate — AlphaVantage
+  tests for the *presence of a top-level key*, NewsAPI for the *value of a required field* plus a
+  `code` → `Failure` lookup AlphaVantage has no analogue for — and a `payload -> Failure | None`
+  hook expresses both only by being empty enough to express anything. Worse, it would have to
+  answer a question neither vendor wants answered the same way: a check inside `request_json`
+  implies a body-detected failure re-enters the retry loop, silently overturning ANV-18's asserted
+  "the call is not repeated"; a check after the loop is a second traversal of a payload the parser
+  is about to walk anyway, to save one `raise`. **So each check is written where it is read**, in
+  the parser beside the knowledge of what the payload means. Generalise on a *third* vendor whose
+  body-level failure is shaped like one of these two — not before.
+- **A missing credential is refused before the request, and says which setting is missing.** A
+  vendor key defaults to a blank `SecretStr`, so "not configured" is the state of every fresh
+  clone rather than an edge case. The client checks first and raises `ExternalServiceError` with
+  `details = {"reason": "not_configured", "setting": "<ENV_VAR>"}` — deliberately *not* through
+  `_error`, whose `Failure` members all describe how a *call* went wrong, and no call was made.
+  Still a 502, which is the honest status (Anvex is up; the upstream is unusable from here), and
+  still `app/clients/`'s one exit. The point is the response: a keyless call would spend a round
+  trip to be told `apiKeyMissing` and reach the operator as `reason: "client_error"`, which is
+  indistinguishable from a malformed query. Naming our own env var in `details` is safe — it is a
+  key name already committed to `.env.example`, not a value — and it is what makes a deployment
+  mistake diagnosable without reading a log.
+- **Where a vendor accepts its key either as a query parameter or as a header, send the header.**
+  The base logs a redacted URL and logs no headers at all, so a key in the query is protected by
+  redaction while a key in a header is never written down. Redaction is good; "not present" is
+  better, and a URL escapes in ways a header does not (a proxy's access log, a `Referer`, a crash
+  report quoting the request line). AlphaVantage has no choice; NewsAPI does, and takes the better
+  one via `auth_headers()`.
 - **A client does not round, quantise, or reshape a number to fit a column.** It parses the
   vendor's *string* straight into `Decimal` (never via `float`, which has already lost the value by
   the time `Decimal` sees it) and reports what was said. The storage scale lives in `app/models/`,
@@ -206,6 +235,17 @@ Async engine, `async_sessionmaker`, declarative `Base`, session lifecycle, and t
 Reusable `Depends` providers: `get_session`, `get_current_user`, pagination params, rate-limit
 guards, client/service factories. Dependencies wire objects together; they do not implement logic.
 
+- **A client is not a repo, and its factory says so.** A repo is a stateless singleton and arrives
+  as a keyword default on the service; a client owns an `httpx.AsyncClient` and therefore a
+  lifetime, so it is a **required** keyword argument on the service and comes from a `yield`
+  dependency that `aclose()`s it in the `finally`. Per-request construction gives up the
+  cross-request pooling the client base exists for — one extra handshake — and buys no leaked
+  pool, no shared mutable state between tests, and no lifespan edit for one endpoint. Constructing
+  one is cheap and opens no socket (the base creates its transport lazily), so a request that
+  never reaches the vendor costs nothing. Keeping a pool warm means an application-scoped client
+  owned by the lifespan and shared with the Celery worker; that is a decision for whichever ticket
+  has a second caller for it, and this factory is the only thing that changes.
+
 ### `app/domain/` — Anvex business logic
 **Pure functions and pure classes.** This is where Anvex's actual rules live: watchlist reordering,
 position math, indicator calculation, token claim construction, ingest windowing rules.
@@ -213,6 +253,15 @@ position math, indicator calculation, token claim construction, ingest windowing
 - Takes plain data in, returns plain data out. **No I/O of any kind** — no DB, no HTTP, no clock
   reads (pass `now` in), no env reads.
 - Because it is pure, it is the cheapest and most valuable thing to unit-test. Test it exhaustively.
+- **A rule about a *vendor's* data takes a `Protocol`, never the vendor's model.** `app/domain/`
+  sits below `app/clients/` in the dependency order, so importing `app.clients.newsapi` to type a
+  ranking rule would invert it. Declare the shape the rule actually reads as a `Protocol` in the
+  domain module and make the function generic over it (`def f[T: Article](items: Sequence[T]) ->
+  tuple[T, ...]`), so the service hands in vendor models, gets vendor models back, and has nothing
+  to translate. The alternative — a domain dataclass the service maps onto and off again — buys a
+  third spelling of one record, beside the vendor model and the `XOut` schema. The test for such a
+  module is written against a three-line stub: if it can only be written by importing
+  `app.clients`, the rule is in the wrong layer.
 - **Rule of thumb: if a rule would still be true on paper without a computer, it belongs in domain.**
 
 ### `app/jobs/` — Celery tasks
@@ -563,6 +612,26 @@ authorization is not data access.
   show is a 200 with an empty page. (Where the parent is *owned*, §4's "refuse with a 404, not a
   403" rule applies on top of this; reference data like a security has no owner and the 404 is the
   plain kind.)
+- **The same rule holds when the child lives at a vendor, and there the local row earns its keep
+  twice.** `GET /v1/news/by-symbol/{ticker}` resolves the ticker against `StockRepo` *before*
+  calling NewsAPI: the vendor answers a nonsense symbol with `{"status": "ok", "totalResults": 0}`,
+  byte-identical to a real company nobody wrote about this week, so **only the local table can tell
+  a typo from a quiet week** — if the service does not ask, the question can never be answered. It
+  also stops a metered quota being spent on garbage, and — the reason that actually decides it —
+  the local row carries the *company name*, so resolving is not a precondition of a good vendor
+  query, it **is** the good query (`q="CAT"` returns articles about cats; `q="CAT" OR "Caterpillar
+  Inc."` does not). Querying the vendor blind would mean shipping the worse product to avoid a 404.
+  A URL is not obliged to be nested to obey this — `/v1/news/by-symbol/{ticker}` is a news resource
+  keyed by a symbol, not a sub-collection of a security — but the 404-vs-empty-page rule is the same.
+- **A collection served entirely from a client still returns `Page[T]`, and `total` counts what
+  `offset` indexes into.** A vendor's own match count is not that number when anything is filtered
+  or de-duplicated after the fetch, and forwarding it produces a `total` of 3,412 above a collection
+  that ends at 74 and a `has_more` that lies on the last page. So the service fetches one vendor
+  page at the vendor's maximum, applies the domain rule, and windows the *result* itself — `total`
+  is the length of the list the window is taken from, and the envelope is self-consistent. This is a
+  deliberate ceiling, not upstream paging: a caller that needs the archive wants a different
+  endpoint. Nothing is persisted on the way through — a third-party document with its own lifecycle
+  buys a cache and a staleness problem, so there is no repo and no table unless a ticket adds one.
 - **Two routers may share a URL prefix; they do not share anything else.** A nested sub-collection
   keeps its own `app/services/x.py`, `app/deps/x.py` (its own `get_x_service` seam), router module
   and `tags`, even when its router declares the same `prefix` as its parent's. The layering is what
