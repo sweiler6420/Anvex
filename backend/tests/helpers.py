@@ -9,8 +9,9 @@ Also home to the fakes that let a layer be tested without the layer below it:
 :class:`StubSession`, because "override ``get_session`` with something that does not touch
 Postgres" is what a ``tests/api/`` test does whenever the route it is contract-testing
 happens to take a session; and the ``FakeXRepo`` / ``make_x`` pairs
-(:class:`FakeUserRepo`, :class:`FakeStockRepo`), because a service's own logic is worth
-testing at unit speed against an in-memory repo rather than only through a database.
+(:class:`FakeUserRepo`, :class:`FakeStockRepo`, :class:`FakeStockDataRepo`), because a
+service's own logic is worth testing at unit speed against an in-memory repo rather than
+only through a database.
 
 **The fakes live here, together.** Each new resource adds its pair beside the existing ones
 rather than starting a module-local set, so an API test can build one object graph shared
@@ -20,16 +21,18 @@ database at all.
 
 from __future__ import annotations
 
+import itertools
 import uuid
 from collections.abc import AsyncIterator, Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
+from decimal import Decimal
 from typing import Any
 
 from fastapi import FastAPI
 from httpx import Response
 
 from app.deps.session import get_session
-from app.models import Stock, User
+from app.models import Stock, StockData, User
 
 #: Every key ``app.schemas.errors.ErrorResponse`` promises, always present.
 ERROR_BODY_KEYS = frozenset({"code", "message", "details", "request_id"})
@@ -282,6 +285,76 @@ class FakeStockRepo:
         return matched[offset : offset + limit], len(matched)
 
 
+class FakeStockDataRepo:
+    """An in-memory stand-in for :class:`app.repos.stock_data.StockDataRepo`.
+
+    Same idea and the same discipline as :class:`FakeStockRepo`: it re-implements the
+    *behaviour* of the real query rather than pretending to be it, and it implements only
+    the method the service actually calls.
+
+    Three behaviours are load-bearing and deliberately faithful:
+
+    * ``total`` is counted **before** the window, exactly as ``BaseRepo._page`` does, so an
+      ``offset`` past the end is ``([], total)`` and not ``([], 0)``.
+    * the date bounds are **inclusive** on both ends, matching the repo's ``date >= start``
+      / ``date <= end``, so a service that turned a single-day request into an empty one
+      would fail here rather than pass.
+    * rows come back **chronologically** by ``(date, time, id)``, which is the order the
+      real query declares — a chart plots left to right, and paging over an unstable order
+      would repeat or skip candles.
+
+    It filters on ``stock_id`` and nothing else, which is the point of the fake: an unknown
+    id yields ``([], 0)``, indistinguishable from a stock that simply has no candles.
+    Turning one of those into a 404 and the other into an empty page is the *service's*
+    judgement, and this is what makes a service that skipped the parent lookup fail.
+
+    ``calls`` records ``(method, kwargs)`` in order, so a test can assert *what the service
+    asked the repo for* — that the resolved limit and the inclusive bounds really reached
+    the boundary, not merely that the result looked right.
+    """
+
+    def __init__(self, *candles: StockData) -> None:
+        self.candles: list[StockData] = list(candles)
+        self.calls: list[tuple[str, Any]] = []
+
+    def add(self, candle: StockData) -> StockData:
+        self.candles.append(candle)
+        return candle
+
+    async def list_for_stock(
+        self,
+        session: Any,
+        stock_id: uuid.UUID,
+        *,
+        start: date | None = None,
+        end: date | None = None,
+        limit: int,
+        offset: int = 0,
+    ) -> tuple[list[StockData], int]:
+        self.calls.append(
+            (
+                "list_for_stock",
+                {
+                    "stock_id": stock_id,
+                    "start": start,
+                    "end": end,
+                    "limit": limit,
+                    "offset": offset,
+                },
+            )
+        )
+        matched = [
+            candle
+            for candle in self.candles
+            if candle.stock_id == stock_id
+            and (start is None or candle.date >= start)
+            and (end is None or candle.date <= end)
+        ]
+        matched.sort(key=lambda candle: (candle.date, candle.time, candle.id))
+        # `total` counts every match in range and is taken *before* the window is applied.
+        return matched[offset : offset + limit], len(matched)
+
+
 def make_stock(
     *,
     ticker_symbol: str = "AAPL",
@@ -302,6 +375,46 @@ def make_stock(
         company=company,
         market=market,
         isin=isin,
+    )
+
+
+#: Ids for detached candles, so :func:`make_candle` never needs a database to be sortable.
+#: ``stock_data.id`` is a ``BIGSERIAL`` in production and is the third ordering key.
+_candle_ids = itertools.count(1)
+
+
+def make_candle(
+    *,
+    stock_id: uuid.UUID,
+    date: date,
+    time: time = time(9, 30),
+    close: str = "101.2500",
+    volume: int = 1_000,
+    candle_id: int | None = None,
+) -> StockData:
+    """Build a detached :class:`~app.models.StockData` for :class:`FakeStockDataRepo`.
+
+    Not :class:`tests.factories.StockDataFactory`, which flushes to a session — the whole
+    point of the unit tier is that there is no session. The parent's id is required for the
+    same reason the factory requires a parent: a candle with an invented ``stock_id`` is a
+    candle no test can find again.
+
+    ``close`` is a **string**, deliberately: ``Decimal("101.2500")`` keeps the trailing
+    zero and the four decimal places the ``NUMERIC(12, 4)`` column has, which is exactly
+    what the API tier asserts survives serialisation. ``Decimal(101.25)`` from a float
+    would not.
+    """
+    price = Decimal(close)
+    return StockData(
+        id=candle_id if candle_id is not None else next(_candle_ids),
+        stock_id=stock_id,
+        date=date,
+        time=time,
+        open_price=price - Decimal("0.5000"),
+        high_price=price + Decimal("1.0000"),
+        low_price=price - Decimal("1.0000"),
+        close_price=price,
+        volume=volume,
     )
 
 
@@ -329,10 +442,12 @@ def make_user(
 
 __all__ = [
     "ERROR_BODY_KEYS",
+    "FakeStockDataRepo",
     "FakeStockRepo",
     "FakeUserRepo",
     "StubSession",
     "assert_error_envelope",
+    "make_candle",
     "make_stock",
     "make_user",
     "override_session",

@@ -385,6 +385,18 @@ authorization is not data access.
   seed script — from asking Postgres for the whole table and then failing `Page.limit`'s own `le`
   bound with a 500. `total` is counted *before* the window, so an offset past the end is an empty
   page with a truthful total, never an implied end of the collection.
+- **`offset` is clamped where `limit` is clamped, and refused where `limit` is refused.** The route
+  carries `Query(ge=0)` so an HTTP client is never quietly moved to a window it did not ask for,
+  while the service-side resolution floors a negative offset at `0` for the callers with no request
+  to reject — a job whose page arithmetic went negative gets the first page rather than a SQL error
+  nobody reads. Same two-layer argument as the limit ceiling; keep the pair together.
+- **A pure rule with a second caller moves *down* to `app/domain/`, never sideways.** Two services
+  importing each other is the wrong shape — it makes them impossible to test apart, and it hides a
+  rule in whichever one happened to need it first. Move the function into `app/domain/<aggregate>.py`
+  and have both import it downward; leave a re-export behind in the original module (`__all__` keeps
+  it honest) so the established import path and its tests keep working, and assert in a test that
+  the re-export **is** the same object rather than a copy. ANV-14 did this to ANV-13's
+  `normalise_ticker`.
 - **Normalising an identifier is the service's job, not the request schema's.** An annotated type's
   `BeforeValidator` (ANV-8's `Ticker`) does apply to a **path** parameter as well as a body — that
   was verified, not assumed — but it only ever covers callers that arrive over HTTP. A rule that a
@@ -400,6 +412,23 @@ authorization is not data access.
   order they are declared in, while a one-segment literal like `/users/me` absolutely can. Declare
   the literal first regardless, and if a test claims the ordering is load-bearing, make it prove
   that against a control app with the declarations reversed rather than asserting a comment.
+- **A collection that only means anything inside a parent is nested under it, and a missing parent
+  is a 404.** `GET /v1/stocks/{stock_id}/data`, not `GET /v1/stock-data?stock_id=…`: the parent is
+  then not omittable, so there is no default that silently means "every parent's rows interleaved",
+  and the two ways of naming the parent are the ones its own resource already established
+  (`/{id}` and `/by-ticker/{ticker}`) rather than a third convention. The service resolves the
+  parent **before** querying the child and raises `NotFoundError` when it is absent — a repo cannot
+  make that call, because "no such parent" and "this parent has no rows" are the same `([], 0)` to
+  it. A sub-collection of a parent that does not exist is a 404; an existing parent with nothing to
+  show is a 200 with an empty page. (Where the parent is *owned*, §4's "refuse with a 404, not a
+  403" rule applies on top of this; reference data like a security has no owner and the 404 is the
+  plain kind.)
+- **Two routers may share a URL prefix; they do not share anything else.** A nested sub-collection
+  keeps its own `app/services/x.py`, `app/deps/x.py` (its own `get_x_service` seam), router module
+  and `tags`, even when its router declares the same `prefix` as its parent's. The layering is what
+  matters, not the URL — and one seam per service is what lets an API test stub the child without
+  also replacing the parent's endpoints. Include the parent's router first in `app/api/v1/
+  __init__.py`, so it wins any path both routers could claim.
 - **Schemas agree with columns by construction.** A validator's length cap is *imported* from the
   model module's constant, never retyped, so widening a `VARCHAR` cannot leave a stale number in a
   schema — and an oversized field is a 422 at the edge rather than a `StringDataRightTruncation`.

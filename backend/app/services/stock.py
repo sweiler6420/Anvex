@@ -20,7 +20,11 @@ That is also why ``limit`` is a required keyword on every paginated repo method 
 defaulting to :data:`~app.schemas.pagination.DEFAULT_PAGE_LIMIT`: the default is a schema
 concept, so supplying it is this layer's job.
 
-**Ticker normalisation happens here.** :meth:`~app.repos.stock.StockRepo.get_by_ticker` is
+**Ticker normalisation happens in the service layer** — the rule itself now lives in
+:func:`app.domain.stock.normalise_ticker`, moved there by ANV-14 when
+``app/services/stock_data.py`` became its second caller, and re-exported from this module so
+``from app.services.stock import normalise_ticker`` still resolves.
+:meth:`~app.repos.stock.StockRepo.get_by_ticker` is
 an exact, case-sensitive match on a unique index — folding case in the repo would turn
 every symbol resolution into a sequential scan — so upper-casing and trimming the caller's
 ``"  aapl "`` is the service's one-line rule. ANV-8's annotated
@@ -41,6 +45,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.errors import NotFoundError
+from app.domain.stock import normalise_ticker
 from app.models import Stock
 from app.repos.stock import StockRepo, stock_repo
 from app.schemas.pagination import Page, resolve_page_limit
@@ -52,16 +57,6 @@ logger = structlog.get_logger("anvex.stocks")
 #: The resource name every error in this module reports, so ``details["resource"]`` is the
 #: same string whether the caller looked the security up by id or by ticker.
 RESOURCE: Final[str] = "stock"
-
-
-def normalise_ticker(ticker: str) -> str:
-    """The canonical spelling of a ticker: trimmed and upper-cased.
-
-    A security has exactly one spelling — ``aapl``, ``AAPL`` and ``" AAPL "`` are the same
-    instrument — and ``stocks.ticker_symbol`` is unique, so a lookup that skipped this step
-    would report a perfectly real stock as missing.
-    """
-    return ticker.strip().upper()
 
 
 class StockService:
