@@ -1672,3 +1672,61 @@ on an unmounted component is a no-op, so it rewrote the test to assert the cance
 "Collapse to minimum size" / "Grow to fill free space" / "Fill the desktop" / "Close window", on the
 grounds that Minimize/Maximize describe desktop operations this component does not perform (nothing
 minimises to a taskbar; there is no restore). One-line revert in `CONTROLS`.
+
+### ANV-34 — Done
+Commit `e8dc016`, **201 new tests** (625 → **826**). **Verified independently:** 826 pass, lint
+clean, and all four widget bugs confirmed against the old repo directly.
+
+**Three of the old widgets could not have worked at all:**
+- **`LineChart` never drew.** Its `yScale` had `domain([0, h])` — *pixel heights*, not prices — and
+  the generator was `.y(yScale)`, handing the whole row object to the scale. *Confirmed at line 39.*
+  Every y coordinate was `NaN`. It also imported `React` as a **named** export of `react`
+  (`undefined`).
+- **`StockChart` could not load.** *Confirmed at line 3:* `import { getData } from 'utils'` — a bare
+  specifier resolves to a **package**, not the sibling file. Had it loaded, it fetched Microsoft
+  prices from `cdn.rawgit.com`, **shut down in 2019**.
+- **`Watchlist`'s reorder never called the API.** *Confirmed, lines 23–30:* `handleOnDragEnd` splices
+  a local array and calls `setWatchlist` — so every reorder reverted on reload. Every row's price
+  was the literal `$320` (twice). The component is also named `Chart`.
+
+**The naive-datetime handling is the best idea in the ticket.** It does not append `Z` and never
+calls `new Date()` on the string. The digits are rebuilt with `Date.UTC(...)` into what the module
+calls a **nominal epoch** — a position on the exchange's wall-clock line, not an instant — and the
+axis is `scaleUtc`, never `scaleTime`, so 09:30 in is "09:30" out on every machine. Local parsing is
+not so much wrong as *unstable*: the labels only look right because a local parse and a local format
+cancel, the numeric **spacing** between candles changes across a DST boundary in the viewer's zone,
+and one `toISOString()` downstream shifts the whole series. **CI runs on UTC, where `scaleUtc` and
+`scaleTime` are identical**, so three tests set `TZ = 'America/New_York'` themselves — without them
+that mutation survives.
+
+**The quoted-string prices are unskippable rather than documented:** `api.js` exports **no function
+that returns the raw `Page.items`**, so `Number()` is not reachable to forget. The discriminating
+fixture is `"9.5"` / `"10.2"` — as strings `"10.2" < "9.5"`, so a missing conversion gives a
+confident inverted y domain **and still draws**.
+
+**`@hello-pangea/dnd` was not brought back, and the first reason is the good one: the API is
+button-shaped.** `PATCH …/stocks/{stock_id}` with `{position}` *is* "move NVDA up" — drag is a way
+of expressing a destination that needs a box model to interpret, and a button expresses the same
+destination with none. Also: it measures its droppable, which jsdom reports as 0×0, so **the one
+assertion this ticket must not get wrong would have been written against a fabrication.** Cost
+stated rather than discovered — dragging a row is a gesture some users expect, and adding it later
+must stay additive.
+
+**Dependencies argued individually, not taken as a bundle.** `d3` itself is 30 packages to reach
+two. `d3-shape` was declined partly because `curveMonotoneX` — which the old `StockChart` used —
+**draws prices that were never printed**. `d3-dsv` existed only to parse a TSV from the dead CDN,
+and `utils.js` imported `csvParse` without ever calling it.
+
+**Bundle delta measured with a temporary import rather than estimated:** 0 bytes today (nothing
+imports the feature, so Rollup drops it), **+65.00 kB raw / +22.93 kB gzip when ANV-35 imports it**,
+of which d3 is +34 kB. CSS did grow 2 kB in this commit, because Tailwind scans source regardless of
+imports.
+
+**33 mutations, 31 killed. Two real gaps found:** M11's "sparkline is not `.nice()`d" test used
+`[9.5, 10.2]`, on which **`.nice()` is a no-op** — a good test made vacuous by convenient data; and
+M21's in-flight test only asserted the *down* buttons, leaving the up buttons' guard uncovered. Two
+equivalent mutants recorded at the line per ANV-33's rule, including one that is **unkillable in
+jsdom but real in a browser** (a repeating Enter keypress).
+
+Every test file's header states whether it proves real behaviour, real behaviour with a fabricated
+size, or wiring only.

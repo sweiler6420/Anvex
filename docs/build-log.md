@@ -90,12 +90,13 @@ modified. What each contributes to Anvex:
 | ANV-31 | Recovery and Unauthorized pages | **Done** |
 | ANV-32 | Home marketing page | **Done** |
 | ANV-33 | Bin-packing window system | **Done** |
-| ANV-34 | Dashboard widgets | Next |
-| ANV-35 … ANV-41 | see `backlog.md` | Not started |
+| ANV-34 | Dashboard widgets | **Done** |
+| ANV-35 | Interactive desktop demo | Next |
+| ANV-36 … ANV-41 | see `backlog.md` | Not started |
 | ANV-43 | Backend password strength policy | Backlog — *found by ANV-30, high priority* |
 
-**3,436 tests total** — **2,811 backend** (2,497 with Docker stopped, DB/S3/broker tiers skipping)
-and **625 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check`
+**3,637 tests total** — **2,811 backend** (2,497 with Docker stopped, DB/S3/broker tiers skipping)
+and **826 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check`
 and `eslint` all clean. Container tiers genuinely execute: **276 DB**, **29 S3**, **9 broker**.
 
 **Cosmetic issues in the ported marketing copy, flagged and deliberately NOT changed** (they are
@@ -352,29 +353,31 @@ such rule was ever written**. The four client-side rules are therefore not a mir
   an open decision, not an oversight.
 
 
-**For ANV-34 (widgets) and ANV-35 (InteractiveDesktop):**
-- **A window's content is a React node on the window object** — `content: <CounterWidget />`.
-  Nothing in `features/desktop/` inspects it or knows a widget exists. **A palette of widgets needs
-  no change to that feature at all.**
-- **`onWindowsChange` is always called with an *updater function*** — the prop must be a React state
-  setter (`onWindowsChange={setWindows}`). This was the original's undocumented contract; passing a
-  plain `(next) => …` **silently loses every drag**. There is now a test asserting it.
-- **Do not pass an inline array literal as `windows`** — a new identity every render re-syncs the
-  internal copy every render. Hold it in `useState`.
-- Window shape: `{id, title, color, x, y, width, height, minWidth, minHeight, content}`, all
-  geometry in **cells**. The content box is `overflow: auto`, sized `calc(100% - 40px)`; **a widget
-  must survive being 2×2 cells** (40×40 px at the default `cellSize`).
-- `resetWindowIdCounter()` exists for tests that want to name the ids a drop produces.
-- **ANV-35 needs no edit to `Workflow.jsx`** — its whole change is
-  `<Workflow demo={<InteractiveDesktop />} />` in `HomePage.jsx`. The old `InteractiveDesktop`
-  (110 lines) is a straight port with `cellSize={20} minGridWidth={4} minGridHeight={3}`; in the
+**For ANV-35 (InteractiveDesktop) — the last frontend port before the authenticated pages:**
+- `import { WIDGET_PALETTE } from '@features/widgets'` — an array of `{name, color, window}` in
+  exactly `WindowMenu`'s item shape, five entries. **`features/desktop/` needs no change at all.**
+  Two windows made from one row still mount independent components (a React element is a
+  descriptor, not an instance).
+- Every entry advertises `minWidth: 2, minHeight: 2`, enforced by `palette.test.jsx`, so the palette
+  cannot promise a size the widget does not survive.
+- **Budget +65 kB raw / +22.9 kB gzip** the moment you import it — measured, not estimated. That is
+  ANV-35's line in the bundle table.
+- **DECISION: the public marketing demo must not make network calls.** The Chart and Watchlist
+  widgets are authenticated (`authApi`), so on `Workflow`'s `demo` prop they would 401 and render
+  error states on a page seen by logged-out visitors. Pass the **pure subset**
+  (Counter / Info / Echo) there. The full palette belongs on `/research` (ANV-36), where the user is
+  signed in.
+- **`onWindowsChange` is always called with an updater function** — the prop must be a React state
+  setter. Passing `(next) => …` silently loses every drag.
+- **Do not pass an inline array literal as `windows`** — hold it in `useState`.
+- The old `InteractiveDesktop` (110 lines) is a straight port: `WindowMenu` in a bordered strip,
+  `BinPackingLayout` in a `flex-1` below, `cellSize={20} minGridWidth={4} minGridHeight={3}`. In the
   `h-96` panel that is a 4-cell menu strip and roughly a 38×14 grid — **check it does not overflow
   the rounded panel.**
-- **jsdom has no layout.** The `ResizeObserver` stub in `src/test/setup.js` is deliberately **inert
-  and never fires** — a stub reporting a fabricated `contentRect` would make every downstream test
-  pass while proving the number the stub invented. When a test must fabricate a size, pass it
-  through `BinPackingLayout`'s `useContainerSize` prop so the invented number **sits beside the
-  assertion**.
-- **Known gap, not fixed:** the `WindowMenu` palette is `draggable` `<li>`s, so it is **mouse-only**
-  — there is no keyboard equivalent of an HTML5 drag, in the original or the port. The honest fix is
-  a click-to-add affordance, which is a behaviour change and belongs to ANV-34/35.
+- `<Workflow demo={<InteractiveDesktop />} />` in `HomePage.jsx` is the whole change there; both
+  seam tests must stay green.
+- **The last mouse-only path in the desktop is `WindowMenu`'s `draggable` `<li>`s** — ANV-33 flagged
+  it, ANV-34 fixed the equivalent problem inside the watchlist with buttons. **This is where a
+  click-to-add affordance belongs.**
+- jsdom has no layout: a chart inside a window will report `unmeasured` unless a size is threaded
+  through `useContainerSize`. That is truthful behaviour, not a bug.
