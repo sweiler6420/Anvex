@@ -57,8 +57,9 @@ modified. What each contributes to Anvex:
 | ANV-5 | Docker Compose stack and backend Dockerfile | **Done** |
 | ANV-6 | Pytest harness | **Done** — *E1 Foundation complete* |
 | ANV-7 | Models and initial migration | **Done** |
-| ANV-8 | Pydantic schemas | Next |
-| ANV-9 … ANV-41 | see `backlog.md` | Not started |
+| ANV-8 | Pydantic schemas | **Done** |
+| ANV-9 | Repositories | Next |
+| ANV-10 … ANV-41 | see `backlog.md` | Not started |
 
 ### ANV-1 — Done
 Commits `0ccc0df`, `9ae4224` on `main`.
@@ -339,3 +340,53 @@ ordinals and a non-deferrable constraint would reject the intermediate state.
   is already ordered by `position` on the relationship, so no caller sorts.
 - `Stock` deletion is RESTRICT-guarded, so `StockRepo.delete` raises `IntegrityError` for a watched
   stock — ANV-13 should map that to `ConflictError`, not let it surface as a 500.
+
+### ANV-8 — Done
+Commit `0bba0b0`, 12 files, 123 new tests. **Verified independently:** `293 passed / 60 skipped`
+with the DB stopped, `348 passed / 5 skipped` with it up, ruff clean.
+
+**I mutation-tested the password guard myself.** Dropping a `SneakyOut` schema with a `password`
+field into `app/schemas/` — not exported, not imported anywhere — made **both** guard tests fail;
+removing it made them pass. The guard walks the package with `pkgutil.iter_modules` rather than
+reading `__all__`, so it catches precisely the unexported schema nobody would check by hand, and
+compares findings against a `ClassVar` allowlist so a future leak has to be written in deliberately.
+
+**`Page[T]` = `{items, total, limit, offset, has_more}`.** Offset paging rather than cursor because
+the frontend renders numbered pages and every Anvex list is a bounded set. `has_more` is a
+`computed_field` so clients cannot each re-derive it and get the off-by-one wrong. Limit bounds
+(`DEFAULT_PAGE_LIMIT=50`, `MAX_PAGE_LIMIT=200`) live in this module so the query parser and the
+response cannot disagree.
+
+**Deliberately no `XUpdate` for:** `StockData` (a candle is an immutable observation; ANV-22 upserts
+whole rows) and `Politician` (reference data, idempotent seed on the natural key).
+
+**Carried into ANV-11 (auth) — the important one:**
+- `TokenPayload` is `{sub: UUID, exp, iat, type}` — standard `sub`, not the legacy `user_id` claim.
+- **Verification must check `type`, not just the signature.** The old `/v1/refresh` called the same
+  verifier on any token, so an *access* token could be traded for a fresh long-lived pair.
+- `RefreshRequest` is a JSON body; the old endpoint took the token as a query parameter, i.e. into
+  every proxy log.
+- There is no `LoginRequest` — CLAUDE.md §4 fixes `OAuth2PasswordBearer`, so login takes
+  `OAuth2PasswordRequestForm`.
+
+**Carried into ANV-12 (users):** username ≥ 7 and password ≥ 7 (taken from the old sign-up form so
+existing accounts stay valid), password capped at 72 bytes because bcrypt ignores the rest.
+**Password *strength* rules are deliberately not in the schema** — those are `app/domain/`.
+`PasswordChange` is separate from `UserUpdate` because it re-authenticates.
+
+**Carried into ANV-9 / ANV-13:** `StockUpdate.isin` is genuinely nullable, so services must apply
+updates with `model_dump(exclude_unset=True)` — the attribute alone cannot distinguish "clear it"
+from "leave it". `WatchlistDetailOut` maps onto the `entries → stock` `selectinload` chain and
+cannot be served from a lazily-loaded object under asyncio. `WatchlistCreate` accepts **no
+`user_id`** — ownership comes from the token.
+
+**Carried into ANV-14 (charts):** `StockDataPoint.from_row(row)` does the date+time recombination.
+Its `datetime` is **naive on purpose** — `stock_data.time` is the exchange's local clock, and
+stamping `+00:00` on 09:30 ET would move every candle. It is the only datetime in the API without an
+offset.
+
+**Wire-format change the frontend must handle:** `Decimal` serialises to a **quoted JSON string**
+(`"1234.5678"`), which is what preserves the fourth decimal place. The old API emitted floats, so
+chart code must `Number()` the value.
+
+New dependency: `pydantic[email]` (without it `EmailStr` is a plain `str`).
