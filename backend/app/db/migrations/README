@@ -1,0 +1,12 @@
+Alembic migration environment for Anvex — async (asyncpg), all objects in the `anvex`
+schema, including alembic's own `alembic_version` table.
+
+Run everything from `backend/`:
+
+    uv run alembic upgrade head
+    uv run alembic downgrade -1
+    uv run alembic revision --autogenerate -m "add stocks"
+    uv run alembic current
+
+The database URL comes from the repo-root `.env` via `app.settings`, never from
+`alembic.ini`. See `env.py`.

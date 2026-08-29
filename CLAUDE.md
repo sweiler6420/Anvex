@@ -175,7 +175,12 @@ Note that steps 5 and 6 both reuse step 4. **That reuse is the whole reason for 
 - **IDs:** UUID primary keys, `gen_random_uuid()` server default.
 - **DB schema:** all tables live in the `anvex` Postgres schema.
 - **Migrations:** Alembic, async. Every model change ships with a migration in the same commit.
-  Never use `Base.metadata.create_all` outside tests.
+  Never use `Base.metadata.create_all` outside tests. `backend/alembic.ini` + `app/db/migrations/`;
+  `env.py` is async and reads the URL from `get_settings()`, never from `alembic.ini`, and alembic's
+  own `alembic_version` table lives in the `anvex` schema with everything else.
+- **Constraint names:** `Base.metadata` carries a naming convention (`pk_` / `fk_` / `uq_` / `ix_` /
+  `ck_`), so Postgres never invents a name Alembic cannot reproduce. Do not name constraints by
+  hand unless one genuinely needs to differ.
 - **Errors:** services raise from `app/domain/errors.py`; middleware maps them to status codes.
 - **Config:** `pydantic-settings` `Settings` object in `app/settings.py`, read once, injected via
   `deps`. Never `os.getenv` outside that module.
