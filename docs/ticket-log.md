@@ -1029,3 +1029,60 @@ task defined on a throwaway app in a test **registers itself on the real applica
 with `shared=False`); and `app/jobs/__init__.py` must **not** re-export `celery_app`, because the
 name shadows the *module* `app.jobs.celery_app` and anything reaching for a constant or signal in
 that module gets a Celery instance and an `AttributeError`.
+
+### ANV-22 — Done · **E5 complete; the backend is finished**
+Commit `ce649c8`. **Verified independently:** `2497 passed / 319 skipped` with Docker stopped,
+`2811 passed / 5 skipped` with the full stack up, ruff clean across 176 files, 100% coverage on all
+three new modules. I also confirmed the AlphaVantage pre-flight fix directly — a blank key now
+returns `{"reason": "not_configured", "setting": "ALPHAVANTAGE_API_KEY"}` before any request.
+
+**Incident: four real HTTP requests reached alphavantage.co.** The ticket said "never call
+AlphaVantage for real". While demonstrating the fan-out on the live compose worker, the task did
+what tasks do and reached the network. **The agent disclosed this prominently and unprompted, at the
+top of its report.** Exposure was minimal — no key configured, so nothing authenticated, no quota
+consumed, no Anvex data sent — but the requests did leave the machine.
+
+**It happened because of a real bug, which it then found and fixed.** `app/clients/alphavantage.py`
+shipped in ANV-18 **without the missing-credential pre-flight** that NewsAPI and S3 both have and
+that `CLAUDE.md` §3 requires. With a blank key, AlphaVantage answers with a **200 carrying an
+`"Error Message"`**, which the parser correctly reads as `client_error` — *byte-identical to the
+answer for a bad ticker*. A scheduled fan-out would have spent one real round trip per ticker per
+month, forever, reporting a missing env var as a defective roster. Fixed, plus a **parameterised
+sweep across every HTTP client** asserting none spends a round trip without its credential.
+
+*Orchestrator note:* the instruction gap was partly mine — I forbade vendor calls **and** asked for
+live-worker demonstrations, which collide for a task whose whole job is calling that vendor. The
+pre-flight now makes it self-solving: an unconfigured client cannot reach the network.
+
+**The `08:05` archaeology.** That constant is neither arbitrary nor a bug: **AlphaVantage stamps an
+intraday bar with the timestamp at the *end* of its interval** (the first regular 5-minute bar of a
+US session is 09:35, not 09:30). So `08:05` is just the first bar covering 08:00–08:05; the window
+was never `[08:05, 17:00]` but `(08:00, 17:00]` in bar-coverage terms, with `:05` an artefact of the
+requested bar width. **Behaviour preserved, expression corrected**: `SESSION_OPEN = 08:00`
+(exclusive) to `17:00` (inclusive) reproduces the old filter bar-for-bar on a 5-minute series *and*
+is right for the other four intervals — the old constant would silently drop 08:01–08:04 from a
+1-minute series and everything before 09:00 from a 60-minute one. Not narrowed to the regular
+session, because AlphaVantage returns extended hours by default, pre/post-market prints are real
+trades, and a chart can narrow a series it has but cannot widen one never ingested.
+
+**The fan-out paces with `countdown`, not sleep.** `ingest_all` (hourly, beat) makes **no vendor
+call** — it plans `(ticker, month)` targets and publishes one task each with
+`countdown = index * 15s`. **One vendor call per task** is what makes that possible: a task covering
+several calls could only space them by waiting, and `await asyncio.sleep` holds a prefork child's
+slot exactly as long as `time.sleep` does, since a task owns its process. Honestly stated as
+**pacing, not rate limiting** — nothing counts calls, so overlapping fan-outs would double the rate;
+mitigated by `20 calls × 15s = 300s < 3600s interval`, asserted by test. A roster larger than the
+budget **converges** rather than completing: every stock's current month before any stock's second.
+
+**Quantisation lives in the domain**, and `PRICE_SCALE` is imported from `app/models/stock.py` — the
+exact import ANV-18's AST sweep forbade the client from making, which is why the rule belongs here.
+`ROUND_HALF_UP`, matching Postgres rather than Python's banker's default.
+
+**Twice-run proof** against the real application database: run 1 wrote 4 rows, run 2 (same month)
+wrote 0 with the count unchanged, run 3 (an *older* month, so the watermark filters nothing and all
+four candles are re-sent) also left the count at 4 — the upsert alone holds it. `186.12345` stored
+as `186.1235`. No `IntegrityError` at any point.
+
+Added `tzdata` explicitly to `pyproject.toml`: `zoneinfo` has no IANA database on Windows, so the
+trading-hours rule would be *wrong* rather than absent without it. It had been arriving transitively
+via celery.

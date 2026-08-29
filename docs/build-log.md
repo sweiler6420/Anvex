@@ -78,12 +78,19 @@ modified. What each contributes to Anvex:
 | ANV-19 | NewsAPI client, service and routes | **Done** |
 | ANV-20 | S3 client and storage service | **Done** |
 | ANV-21 | Celery application and worker wiring | **Done** |
-| ANV-22 | Stock ingest job | Next — *closes E5 and the backend* |
-| ANV-23 … ANV-41 | see `backlog.md` | Not started |
+| ANV-22 | Stock ingest job | **Done** — *E5 complete; **the backend is done*** |
+| ANV-23 | Vite scaffold, Tailwind and test harness | Next — *first frontend ticket* |
+| ANV-24 … ANV-41 | see `backlog.md` | Not started |
 
-**2,591 tests** passing with the full stack up (2,291 with Docker stopped — DB, S3 and broker tiers
-skip), 99% coverage. `ruff check` and `ruff format --check` clean across 169 files.
-Container tiers genuinely execute: **29 S3 tests** against MinIO, **6 broker tests** against Redis.
+**2,811 tests** passing with the full stack up (2,497 with Docker stopped — DB, S3 and broker tiers
+skip), 99% coverage. `ruff check` and `ruff format --check` clean across 176 files.
+Container tiers genuinely execute: **276 DB**, **29 S3**, **9 broker**.
+
+`AverageInvestorService` is now fully replaced and can be deleted. Two things it did that Anvex
+does not yet: **deep historical backfill** (its 43-month sweep — `ingest_month` accepts any explicit
+month, but nothing infers a gap older than the watermark, so closing one means dispatching months by
+hand) and the **EC2/Lambda deployment glue** (deliberately gone, not ported — beat + a worker
+container is the equivalent). Both are ticket-sized additions, neither needs the old code.
 
 ---
 
@@ -92,84 +99,11 @@ Container tiers genuinely execute: **29 S3 tests** against MinIO, **6 broker tes
 Only what is still outstanding. Once a ticket consumes one of these, delete it — the full record
 stays in [`ticket-log.md`](./ticket-log.md).
 
-**For ANV-22 (ingest) — the last backend ticket:**
-- The task body is **exactly** `return run_async(lambda: _ingest(...))`. `run_async` takes a
-  **factory, not a coroutine** (one built at the call site is built outside the loop that is about
-  to exist). The async half resolves `get_settings()` + `async with get_session()` and calls **one**
-  service method.
-- Give the task an explicit `name="jobs.ingest.<function>"` and add `"app.jobs.ingest"` to
-  `TASK_MODULES` — a derived sweep fails the suite until you do. Add a `BEAT_SCHEDULE` entry whose
-  `expires` is **shorter than its interval**; parameterised tests check that and that the name is
-  registered.
-- **Hold one `S3Client` for the task's whole life** (`async with S3Client(settings)`), never at
-  import or worker boot — its connector is loop-bound and a prefork worker forks.
-  `default_session()` is already shared and fork-safe; do not build your own.
-- **Decide retryability yourself. Do not add `autoretry_for`** — `ExternalServiceError` covers both
-  "vendor is down" (retry) and "key is blank" (never). Catch it, branch on `details["reason"]`
-  (`rate_limited` → reschedule, `not_configured` → let it fail), and call
-  `self.retry(exc=exc, countdown=self.retry_countdown())`. Note NewsAPI's `maximumResultsReached`
-  maps to `client_error`, not `rate_limited`, precisely because rescheduling it would loop forever.
-- **The task will run twice.** `acks_late` plus beat re-driving after a lost worker guarantees it.
-  `bulk_upsert` on a real constraint plus batch dedupe in `app/domain/ingest.py` is what makes that
-  safe — the repo does **no** dedupe and an internal duplicate raises `cannot affect row a second
-  time`.
-- If the fan-out needs longer than 960s, raise the time limits **and** check
-  `BROKER_VISIBILITY_TIMEOUT_SECONDS` still exceeds them — a test asserts the ordering, because
-  Redis has no real ack and a shorter visibility timeout redelivers to a second worker while the
-  first is still running.
-- Broker-tier tests live in `tests/integration/`, use `broker_app` / `broker_worker`, and **any stub
-  task must pass `shared=False`** — `@app.task` defaults to `shared=True` and registers itself on
-  every Celery app finalized afterwards, including the real one.
-- From ANV-20: `content_type_for`, `resolve_download_ttl` and `export_key` already exist;
-  `export_key` needs `now` **and** `unique` from you (entropy is an ambient input, same rule as the
-  clock). `download_url` exists but **no route mounts it** — an open decision, not an oversight.
-
-**For ANV-22 (ingest) — what ANV-18 deliberately left you:**
-- You receive `IntradaySeries` carrying `timezone` (e.g. `"US/Eastern"`) and a tuple of
-  `IntradayCandle` in the vendor's order (**newest first**).
-- **All of this is yours, none of it is done:** the 08:05–17:00 filter (use `series.timezone`, do
-  **not** hardcode a zone); quantising `Decimal` prices to the model's scale — the client hands you
-  full vendor precision on purpose; mapping `open/high/low/close` → `open_price/…` and attaching
-  `stock_id`; which months to fetch; and the 5-calls-per-minute pacing across the fan-out. **The
-  client will never sleep for you** — a test asserts `sleeps == []` across two calls.
-- An empty series is a legitimate `()`, not an error — decide what "nothing traded" means.
-- `ExternalServiceError` with `details["reason"] == "rate_limited"` is your reschedule signal, and
-  it carries **no `attempts` key** when it came from a 200 body.
-
-**For ANV-18 (AlphaVantage) — and every client after it:**
-- Subclass `BaseHTTPClient`: set `vendor` and `base_url`, keep the key as a **`SecretStr` on the
-  instance**, and return it from `auth_params()`. **Do not call `.get_secret_value()` yourself** —
-  the base unwraps it while building one request and never stores the plaintext.
-- A vendor method is one line: `payload = await self.get_json(path, params=...)` then
-  `Model.model_validate(payload)`. **No `try`, no status check, no retry loop, no logging** —
-  the base owns all of it.
-- **The AST sweep will fail you** for importing `app.schemas`, `app.models`, `app.repos`,
-  `app.db`, `app.services`, `app.jobs`, `app.api`, `sqlalchemy`, `requests`, or any `app.` import
-  outside `{app.clients, app.clients.base, app.domain.errors, app.settings}`. `app.schemas` is
-  forbidden **on purpose** — it is Anvex's public shape and a vendor does not share it, so define
-  the vendor's model in the client module.
-- **AlphaVantage's rate-limit response is a 200 with a JSON "Note"/"Information" body**, not a 429,
-  so the base cannot see it. Detect it in the parser and raise
-  `ExternalServiceError(..., details={"reason": "rate_limited"})`. If ANV-19 needs the same, add a
-  `_check_payload` hook to the base rather than duplicating.
-- Proactive quota throttling (5 calls/min) is **not** a client concern — that belongs to the job
-  that fans out (ANV-22).
-- Ticker normalisation is the service's job; take the symbol as a primitive.
-- Tests: `respx` via the `mock_http` fixture, never a live vendor. Use the
-  `sleeps` / `jitter=lambda: 0.0` fixture idiom from `test_client_base.py` to assert on retries
-  without real waiting.
-
 **For any ticket writing a service — the sweep pattern (new, from ANV-15):**
 Any property that must hold for *every* use case (auth required, resource noun stable, no commit on
 a read) is better expressed as one parameterised sweep whose case list is **derived** from
 `vars(XService)` and asserted complete, than as N hand-written tests one of which will be forgotten.
 ANV-15's ownership sweep fails the suite if a new use case is added without isolation coverage.
-
-**For ANV-22 (ingest):**
-- `bulk_upsert` is a Core statement — it does **not** update the session's identity map. Re-read or
-  `expunge_all` if ORM objects are still held.
-- **No repo-level dedupe.** A batch containing an internal duplicate raises `cannot affect row a
-  second time`; deduplicate in `app/domain/ingest.py` first.
 
 **For any ticket writing a service:**
 - Pre-check for the message, constraint for the correctness: keep `*_exists` so the 409 can name
@@ -180,8 +114,33 @@ ANV-15's ownership sweep fails the suite if a new use case is added without isol
 - Add fakes **beside** the existing ones in `tests/helpers.py`, and keep them faithful to the
   awkward parts of the real repo — a forgiving fake silently passes the bug the test exists to catch.
 
+**For the frontend epic (ANV-23 onward) — API contract facts the UI must respect:**
+- **Node is not installed on this machine, by choice.** Every `npm` / `vite` / `vitest` command runs
+  **inside Docker**. `node:22-alpine` is already pulled locally.
+- **Prices are quoted JSON strings**, not numbers — `"1234.5678"`. That is what preserves the fourth
+  decimal; JSON numbers go through float and lose it. Chart code must `Number()` them.
+- **`stock_data`'s `datetime` is naive on purpose** — no `Z`, no offset. It is the exchange's local
+  clock, and stamping UTC on 09:30 ET would move every candle. Do not "fix" it.
+- **The error envelope is fixed and every non-2xx uses it:**
+  `{"error": {"code", "message", "details", "request_id"}}`, `details` always `{}` rather than
+  `null`. **Branch on `code`, never on `message`.**
+- **Auth codes to handle:** `token_expired` → refresh; `invalid_token` / `wrong_token_type` → log
+  out. Refresh must be **single-flight** — the old app fired one refresh per concurrent 401 — and it
+  triggers on **401**, not 403 (the old app had that backwards).
+- **`POST /v1/auth/refresh` takes a JSON body**, not a query parameter.
+- Routes are `/v1/auth/{login,refresh,recovery}`, `/v1/users` + `/me` + `/{id}`, `/v1/stocks` +
+  `/{id}` + `/by-ticker/{ticker}`, `/v1/stocks/{id}/data`, `/v1/watchlists` (+ `/stocks` sub-routes),
+  `/v1/politicians`, `/v1/news/{top,by-symbol/{ticker}}`.
+- **Lists return `Page[T]` = `{items, total, limit, offset, has_more}`.**
+- **Never persist a password.** The old app wrote it to `localStorage` for "remember me" — username
+  only, and the access token stays in memory.
+
 **Still unimplemented, deliberately:**
 - **No mail client.** `POST /v1/auth/recovery` logs `delivered=False` and returns 202, behind a
   `TODO(ANV-mail)` that a unit test asserts is still present. Wiring real delivery needs its own
   ticket.
+- **No deep historical backfill.** `ingest_month` takes any explicit month, but nothing infers a gap
+  older than the watermark.
+- **`download_url` exists but no route mounts it** — whether a presigned URL should leave the API is
+  an open decision, not an oversight.
 
