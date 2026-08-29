@@ -1312,6 +1312,50 @@ and each of them is a place the sign-up port would otherwise have copied a defec
   test that keeps this honest sends a 409 whose message names no field at all** — an
   implementation matching on the sentence has nothing to match and puts it in the banner.
 
+### A page whose API refuses to tell it anything (ANV-31)
+
+`RecoveryPage` and `UnauthorizedPage`. ANV-29's five parts are unchanged; these are the
+rules that apply wherever the *screen* is what protects a §4 property.
+
+- **A page in front of an anti-enumeration endpoint renders a constant, not the response.**
+  `POST /v1/auth/recovery` answers 202 with a fixed body for every username, so there is
+  nothing to branch on — but "does not branch" is the weak version. `RecoveryPage` ignores
+  the body entirely and displays a string defined in its own module, which makes "the same
+  thing every time" true **by construction** rather than by the server's continued good
+  behaviour: a backend that regressed to echoing the identifier could not leak it through
+  the page. It also removes the user's input from the success view (the form is replaced,
+  not disabled), because that is what makes the property *assertable* — two submissions of
+  two different identifiers produce byte-identical markup. The test compares `outerHTML`
+  across two renders with React's `useId` tokens blanked, and asserts the two requests
+  **differed**; without that second assertion it would pass having submitted the same name
+  twice.
+- **A confirmation is not a transition, so it gets a link and not a timer.** ANV-30's
+  navigation exception is for a transition no guard can own; a page that produces no
+  session, changes no route's admissibility and leaves the user where they chose to be has
+  no transition at all. The old recovery page's `setTimeout(…, 3000)` was never cleared and
+  fired into an unmounted component — but clearing it is not the fix, dropping it is. Three
+  seconds is a guess about a reading speed, and it moves the page out from under a
+  screen-reader user mid-announcement; a permanent `<Link>` is available at every moment
+  instead of at second three. **Two tests, not one**: install fake timers *before* the
+  submit (a `setTimeout` scheduled on the real clock is not advanced by a fake one
+  installed afterwards, so the naive ordering cannot fail) and advance past the old delay —
+  once with the page mounted, which fails for a correctly *cleared* timer too, and once
+  after `unmount()`, which is the one that isolates the cleanup. React 18 does not warn
+  about a post-unmount `setState`, so a `console.error` spy proves nothing here.
+- **A screen for a state the app cannot currently reach says so.** `/unauthorized` exists
+  and nothing navigates to it: the API has no roles, no token claim carries one, no service
+  raises `ForbiddenError`, and §4 answers "not yours" with a 404 rather than a 403. The old
+  copy ("You do not have access to the requested page") described a permission system this
+  application does not have and sent the reader looking for an administrator who does not
+  exist. Naming the absence is the honest version, and it is testable — the page asserts
+  both what it says and what it must not say. A page with no useful action offers
+  destinations that always exist, rather than the old `navigate(-1)` button whose happy
+  path is the page that just refused you and which does nothing at all in a fresh tab.
+- **A page component never goes in `routes/`.** `NotFound.jsx` is there only because the
+  404 has no route module of its own; `routes/Unauthorized.jsx` beside
+  `routes/unauthorized.jsx` is the *same file* on Windows and macOS. Pages live under
+  `features/<area>/components/`, which is ANV-29's convention anyway.
+
 ### Frontend test harness (ANV-23)
 
 The mirror of §6's backend rules: **extend the one setup file and the one MSW server; never start a
