@@ -72,11 +72,12 @@ modified. What each contributes to Anvex:
 | ANV-13 | Stocks service and routes | **Done** |
 | ANV-14 | Stock data service and routes | **Done** |
 | ANV-15 | Watchlists — reorder domain, service and routes | **Done** |
-| ANV-16 | Politicians seed data, service and routes | Next |
-| ANV-17 … ANV-41 | see `backlog.md` | Not started |
+| ANV-16 | Politicians seed data, service and routes | **Done** — *E4 Core features complete* |
+| ANV-17 | Client base | Next |
+| ANV-18 … ANV-41 | see `backlog.md` | Not started |
 
-**1,492 tests** passing with `db-test` up (1,256 with it stopped, DB tier skipping), 92% coverage.
-`ruff check` and `ruff format --check` are both clean across all 122 files.
+**1,764 tests** passing with `db-test` up (1,499 with it stopped, DB tier skipping), 99% coverage.
+`ruff check` and `ruff format --check` are both clean across all 137 files.
 
 ---
 
@@ -85,16 +86,22 @@ modified. What each contributes to Anvex:
 Only what is still outstanding. Once a ticket consumes one of these, delete it — the full record
 stays in [`ticket-log.md`](./ticket-log.md).
 
-**For ANV-16 (politicians):**
-- **Do not import the ownership machinery.** Politicians are reference data with no owner, so their
-  404 is the plain kind, like `app/services/stock.py`'s. `_resolve_owned` does not apply.
-- `resolve_window` (in `app/domain/stock_data.py`) now has **two** callers. If ANV-16's paginated
-  list becomes the third, that is the moment to move it down to a neutral `app/domain/pagination.py`
-  with a re-export — per CLAUDE.md's "a pure rule with a second caller moves down" rule.
-- **Seeding is idempotent via `bulk_upsert` on a real constraint**, and the batch must be
-  deduplicated in `app/domain/` first — the repo does no dedupe and a batch with an internal
-  duplicate raises `cannot affect row a second time`.
-- Copy `list_mine`'s shape verbatim for the paginated list.
+**For ANV-17 (client base) — opening the integrations epic:**
+- `app/clients/` is still an empty `__init__.py`. You establish that layer the way ANV-16
+  established `app/data/`: put its *shape* in a `base` module, document the one exception type it
+  raises, and **enforce the layering rule with an AST test over the whole package** rather than
+  prose. `tests/unit/test_data_loader.py::TestTheLayerStaysInItsLane` is a ready template — swap the
+  forbidden import list.
+- **Clients raise `ExternalServiceError` (→ 502).** It is already in `app/domain/errors.py` and in
+  §4's mapping table but has **no producer yet**. Note this is deliberately *different* from
+  ANV-16's precedent: `app/data/` raises a plain `ValueError` and stays free of domain vocabulary,
+  because a broken seed file is a repo defect reached from a script and has no status code. A client
+  failure is always inside a request and already has one waiting.
+- `app/domain/pagination.py` now holds `resolve_window` / `PageWindow` if a client needs a window;
+  `resolve_page_limit` bounds still live in `app/schemas/pagination.py`.
+- `respx` + the `mock_http` fixture is the client tier's equivalent of a fake repo — and a
+  respx-only test in `tests/integration/` keeps running with Docker stopped.
+- **Never hit a live vendor API in a test.**
 
 **For any ticket writing a service — the sweep pattern (new, from ANV-15):**
 Any property that must hold for *every* use case (auth required, resource noun stable, no commit on

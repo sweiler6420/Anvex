@@ -726,3 +726,47 @@ nothing).
 **Repo-wide formatting settled here.** The agent noted `ruff format --check` would reformat 37
 files, i.e. formatting was never enforced. The orchestrator ran `ruff format` across the repo (122
 files, tests still green) and added the check to ANV-38's CI scope, so it cannot drift again.
+
+### ANV-16 — Done · **E4 Core features complete**
+Commit `61538b8`, 22 files, 272 new tests. **Verified independently:** `1764 passed / 5 skipped`
+with `db-test` up, `1499 passed / 270 skipped` with it stopped, `ruff check` and
+`ruff format --check` both clean across 137 files. 100% coverage on `app/services/politician.py`.
+
+**The `app/data/` loader pattern, set here** — this was the first user of that layer:
+
+- **A data file is an envelope, not a bare array:** `{"provenance": "...", "rows": [...]}`, and
+  `load_document` **refuses a file whose `provenance` is missing or blank.** That is the whole point
+  of the key: fabricated reference data later being read as sourced data is the failure mode, and
+  the only defence that cannot be forgotten is making an unattributed file unloadable. *(The
+  orchestrator mutation-tested this: a file with no `provenance` is genuinely refused.)*
+- Rows validate against the resource's `XCreate` at load, so a bad row fails naming the file, row
+  index and field — not as an `IntegrityError` mid-insert.
+- `SeedDataError` is a plain `ValueError`, **deliberately untranslated**: `app/data/` does not import
+  `app/domain/errors.py`, because a broken checked-in file is a repo defect reached from a script,
+  never a request, so there is no status code for it to become. An AST test over every module in
+  `app/data/` forbids `sqlalchemy`, `httpx`, `app.repos`, `app.db` and any `app.` import beyond the
+  resource's schema.
+
+**Seed data is 54 rows and entirely synthetic**, generated from a seeded random name pool over a
+hand-written per-state plan. The ids are Bioguide-*shaped* but are not Bioguide ids and resolve to
+nobody. The file states all of this in its own `provenance` key and two tests assert it keeps saying
+so. Coverage: 12 states + 1 stateless, 3 parties, 2 chambers, and all four nullable columns
+exercised.
+
+**`resolve_window` moved down.** Third caller, so it now lives in `app/domain/pagination.py`,
+re-exported from `app/domain/stock_data.py`, with tests asserting the re-exports are the *same
+objects* (a copy would pass every behavioural test while drifting). Leaving it put would have made a
+politician service import a candle module. This generalises the "moves down" rule a second time,
+*inside* `app/domain/`, for cross-aggregate rules.
+
+**Dedupe and idempotency are two mechanisms, documented as not substituting for each other:**
+within a run, `dedupe_politicians` collapses the batch with **last occurrence winning** (what a
+sequential loop of upserts would have left); across runs, the repo's `ON CONFLICT DO UPDATE`. Proven
+load-bearing by a pair of integration tests — the same duplicate batch raises `cannot affect row a
+second time` through the repo, and succeeds through the service. Seed run twice against real
+Postgres: 54 rows both times, 54 distinct ids.
+
+**Two judgement calls worth keeping:** an unknown filter value is an **empty page, not a 422** —
+`party` is free text in the database, and refusing "Whig" would mean Anvex claiming a vocabulary it
+does not own. And `politician_id` is trimmed but **not** case-folded on lookup, unlike a ticker,
+because a roster id is opaque and folding would make a genuinely distinct id unfindable.
