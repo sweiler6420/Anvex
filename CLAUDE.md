@@ -250,7 +250,9 @@ authorization is not data access.
 ## 4. Backend conventions
 
 - **Routes:** `/v1/<plural-resource>`. Router `prefix` carries the version; never hardcode it in a
-  path decorator.
+  path decorator. **A literal segment is declared before a parameterised one** — `/users/me`
+  above `/users/{user_id}` — because Starlette matches in declaration order and the reversed
+  order turns `/me` into a failed attempt to parse `"me"` as a UUID.
 - **IDs:** UUID primary keys, `gen_random_uuid()` server default.
 - **DB schema:** all tables live in the `anvex` Postgres schema.
 - **Migrations:** Alembic, async. Every model change ships with a migration in the same commit.
@@ -317,7 +319,38 @@ authorization is not data access.
   decoy digest on the miss path). This covers login, password recovery, and any future
   "is this taken" probe reachable without a token. Both the old `/v1/login` and the old
   `/v1/recovery` failed this: recovery answered 404 with the username echoed back, which made it
-  a free enumeration API.
+  a free enumeration API. **Registration is the one deliberate exception** — a sign-up form on
+  unique columns has to say *which* field clashed or it is unusable, and the only design that
+  closes the leak ("always accept, then mail the address") needs a mail client we do not have.
+  It is an exception because it creates something; a read must never be one.
+- **A refusal that would confirm the resource exists is a 404, not a 403.** When a caller asks
+  for a row that is real but not theirs, the answer is byte-identical to the answer for a row
+  that does not exist — same status, same `code`, same `details` keys — and the service returns
+  it *without querying*, so response time does not answer the question either. 403 is for an
+  action the caller may not perform on something they can already see; "this belongs to somebody
+  else" is not that. The rule applies to every owned resource (`GET /v1/users/{user_id}` today,
+  watchlists next), and it is the other half of why a repo provides no "owned by" query:
+  authorization is a service rule, and the shape of the refusal is part of that rule.
+- **A uniqueness pre-check is for the *message*; the unique index is for the *correctness*.**
+  `email_exists`-style checks exist so a duplicate becomes a 409 naming the field a form has to
+  fix (`details.field`), never so the insert may assume it is safe — two requests can both pass
+  the check before either flushes. So a service that pre-checks **also** catches the
+  `IntegrityError`, matches the constraint name (the deterministic `uq_<table>_<column>` from
+  `Base.metadata`'s naming convention), and raises **the same** `ConflictError` the pre-check
+  would have. Three parts are load-bearing: `await session.rollback()` first, because Postgres
+  aborts the whole transaction on a constraint violation and refuses every later statement in
+  it; the same error either way, so a client cannot tell "already taken" from "you were second";
+  and an unrecognised constraint **re-raised untouched**, because that one really is a bug and a
+  bug should be a 500. A conflict body never echoes the submitted value back. Only real Postgres
+  can prove the constraint names match what the driver reports — that assertion belongs in
+  `tests/integration/`, because a hand-built `IntegrityError` only tests itself.
+- **An exception from `app/utils/` is translated by the service that called it.** `app/utils/`
+  has no Anvex meaning and therefore cannot import `app/domain/` (§3), so its failures are plain
+  builtins — `PasswordTooLongError` is a `ValueError`. The calling service is the only place
+  that can turn one into a domain error, and it must: uncaught, a `ValueError` from a util is a
+  500 for input the API should simply have refused. `UserService._hash` is the worked example
+  (→ `ValidationError`, i.e. 422), and the path is genuinely reachable — a schema cap counted in
+  characters does not enforce a library's limit counted in bytes.
 - **Domain takes the clock as a parameter.** No module under `app/domain/` reads the clock, and
   every function that needs the time takes `now` as a required keyword-only, **timezone-aware**
   datetime (a naive one is a `ValueError`: `.timestamp()` would silently resolve it in the server's

@@ -20,13 +20,16 @@ from app.deps.auth import (
 )
 from app.deps.session import get_session
 from app.deps.settings import get_settings_dep
+from app.deps.user import UserServiceDep, get_user_service
 
 __all__ = [
     "AuthServiceDep",
     "CurrentUser",
+    "UserServiceDep",
     "get_auth_service",
     "get_current_user",
     "get_session",
     "get_settings_dep",
+    "get_user_service",
     "oauth2_scheme",
 ]
