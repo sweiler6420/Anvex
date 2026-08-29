@@ -770,3 +770,54 @@ Postgres: 54 rows both times, 54 distinct ids.
 `party` is free text in the database, and refusing "Whig" would mean Anvex claiming a vocabulary it
 does not own. And `politician_id` is trimmed but **not** case-folded on lookup, unlike a ticker,
 because a roster id is opaque and folding would make a genuinely distinct id unfindable.
+
+### ANV-17 — Done
+Commit `2cbe41b`, 5 files, 131 new tests, **100% coverage on `app/clients/base.py`** (222
+statements). **Verified independently:** `1895 passed / 5 skipped` with `db-test` up,
+`1630 passed / 270 skipped` with it stopped, ruff check and format clean across 140 files.
+
+**A subclass is deliberately tiny:** two class attributes, one `auth_params()`, and one `async`
+method per vendor operation that calls `self.get_json(...)` and validates into a model. **No `try`,
+no status check, no retry loop, no logging in a subclass** — the base owns all of it.
+
+**Four named timeouts rather than one**, because a bare `timeout=5` sets all four and hides which
+was meant: connect 5s (a handshake is fast or the host is gone), read 15s (a vendor is allowed to
+think), write 10s, pool 5s.
+
+**Retry, and the 429 decision.** 4xx is never retried. 5xx and `httpx.TransportError` (timeouts are
+a subclass, so one clause covers the network family) get 3 attempts, 0.2→0.4→cap 2.0s, jittered
+**downward** so a fanned-out job does not resynchronise into a second herd. 429 is treated as its own
+case — a "not now", not a "never": a shorter budget (one retry, enough to ride a burst boundary but
+not to keep hammering a vendor that means it), and **`Retry-After` honoured but capped at 2s**. A
+vendor asking for 60s is asking for longer than a request may be held open, so the call fails
+immediately with `retry_after` in `details` and the caller reschedules. **No code path can wait an
+unbounded time**, and the loop is bounded twice — by attempt count *and* a 20s wall-clock budget,
+since attempts alone do not stop three slow-but-not-dead responses adding up.
+
+Also non-retryable, asserted by call count: a malformed 200 body (a vendor answering HTML is broken,
+not blipping), and a 3xx — `follow_redirects=False`, because following one would resend the
+credential-bearing URL to a host the vendor chose.
+
+**Credential redaction uses two independent tests**, because either alone has a hole: the parameter
+*name* is credential-shaped, **or** its *value* is one of this call's secrets (a vendor that names
+its key `u` defeats the first; a key we never enumerated defeats the second). `REDACTED` is spelled
+as a word rather than `***` because `urlencode` turns `*` into `%2A` — the same guarantee in a form
+nobody greps for. The diagnostic parts of the query survive on purpose: blanking the whole query
+string would keep the secret safe and make the log useless.
+
+*Orchestrator verification note:* my first check appeared to show value-based redaction failing. It
+was my own error — `redact_url(secrets=...)` takes plain `str` and I passed a `SecretStr`, which
+never compares equal. Re-run with the right type, both paths fire. The base itself unwraps
+`get_secret_value()` before building the set, so the plumbing is correct.
+
+**The AST sweep** parses every module in `app/clients/` and fails on `sqlalchemy`, `requests`,
+`app.repos`, `app.db`, `app.models`, `app.services`, `app.schemas`, `app.jobs`, `app.api`, any
+`app.` import outside a four-name allow-list, anything but `ExternalServiceError` from
+`app.domain.errors`, a `time.sleep` call, or a bare `print`. It carries a non-vacuity test **and**
+`test_the_sweep_would_catch_a_violation`, which runs the checkers over synthetic violating source —
+a checker that cannot fail proves nothing.
+
+**One documented deviation:** CLAUDE.md §3 previously named services as the *only* layer allowed to
+unwrap a `SecretStr`. Holding the key in the client is the safer design, so the agent amended that
+sentence to name `app/clients/` as the one exception (unwrapped in the request builder, plaintext
+never stored) rather than silently violating it.

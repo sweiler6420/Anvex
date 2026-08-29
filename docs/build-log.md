@@ -73,11 +73,12 @@ modified. What each contributes to Anvex:
 | ANV-14 | Stock data service and routes | **Done** |
 | ANV-15 | Watchlists — reorder domain, service and routes | **Done** |
 | ANV-16 | Politicians seed data, service and routes | **Done** — *E4 Core features complete* |
-| ANV-17 | Client base | Next |
-| ANV-18 … ANV-41 | see `backlog.md` | Not started |
+| ANV-17 | Client base | **Done** |
+| ANV-18 | AlphaVantage client | Next |
+| ANV-19 … ANV-41 | see `backlog.md` | Not started |
 
-**1,764 tests** passing with `db-test` up (1,499 with it stopped, DB tier skipping), 99% coverage.
-`ruff check` and `ruff format --check` are both clean across all 137 files.
+**1,895 tests** passing with `db-test` up (1,630 with it stopped, DB tier skipping), 93% coverage.
+`ruff check` and `ruff format --check` are both clean across all 140 files.
 
 ---
 
@@ -86,22 +87,28 @@ modified. What each contributes to Anvex:
 Only what is still outstanding. Once a ticket consumes one of these, delete it — the full record
 stays in [`ticket-log.md`](./ticket-log.md).
 
-**For ANV-17 (client base) — opening the integrations epic:**
-- `app/clients/` is still an empty `__init__.py`. You establish that layer the way ANV-16
-  established `app/data/`: put its *shape* in a `base` module, document the one exception type it
-  raises, and **enforce the layering rule with an AST test over the whole package** rather than
-  prose. `tests/unit/test_data_loader.py::TestTheLayerStaysInItsLane` is a ready template — swap the
-  forbidden import list.
-- **Clients raise `ExternalServiceError` (→ 502).** It is already in `app/domain/errors.py` and in
-  §4's mapping table but has **no producer yet**. Note this is deliberately *different* from
-  ANV-16's precedent: `app/data/` raises a plain `ValueError` and stays free of domain vocabulary,
-  because a broken seed file is a repo defect reached from a script and has no status code. A client
-  failure is always inside a request and already has one waiting.
-- `app/domain/pagination.py` now holds `resolve_window` / `PageWindow` if a client needs a window;
-  `resolve_page_limit` bounds still live in `app/schemas/pagination.py`.
-- `respx` + the `mock_http` fixture is the client tier's equivalent of a fake repo — and a
-  respx-only test in `tests/integration/` keeps running with Docker stopped.
-- **Never hit a live vendor API in a test.**
+**For ANV-18 (AlphaVantage) — and every client after it:**
+- Subclass `BaseHTTPClient`: set `vendor` and `base_url`, keep the key as a **`SecretStr` on the
+  instance**, and return it from `auth_params()`. **Do not call `.get_secret_value()` yourself** —
+  the base unwraps it while building one request and never stores the plaintext.
+- A vendor method is one line: `payload = await self.get_json(path, params=...)` then
+  `Model.model_validate(payload)`. **No `try`, no status check, no retry loop, no logging** —
+  the base owns all of it.
+- **The AST sweep will fail you** for importing `app.schemas`, `app.models`, `app.repos`,
+  `app.db`, `app.services`, `app.jobs`, `app.api`, `sqlalchemy`, `requests`, or any `app.` import
+  outside `{app.clients, app.clients.base, app.domain.errors, app.settings}`. `app.schemas` is
+  forbidden **on purpose** — it is Anvex's public shape and a vendor does not share it, so define
+  the vendor's model in the client module.
+- **AlphaVantage's rate-limit response is a 200 with a JSON "Note"/"Information" body**, not a 429,
+  so the base cannot see it. Detect it in the parser and raise
+  `ExternalServiceError(..., details={"reason": "rate_limited"})`. If ANV-19 needs the same, add a
+  `_check_payload` hook to the base rather than duplicating.
+- Proactive quota throttling (5 calls/min) is **not** a client concern — that belongs to the job
+  that fans out (ANV-22).
+- Ticker normalisation is the service's job; take the symbol as a primitive.
+- Tests: `respx` via the `mock_http` fixture, never a live vendor. Use the
+  `sleeps` / `jitter=lambda: 0.0` fixture idiom from `test_client_base.py` to assert on retries
+  without real waiting.
 
 **For any ticket writing a service — the sweep pattern (new, from ANV-15):**
 Any property that must hold for *every* use case (auth required, resource noun stable, no commit on
