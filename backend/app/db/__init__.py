@@ -6,6 +6,7 @@ Nothing in this package knows what a Stock is (``CLAUDE.md`` §3) — models liv
 
 from app.db.base import NAMING_CONVENTION, SCHEMA, Base, metadata
 from app.db.engine import create_engine, dispose_engine, get_engine
+from app.db.health import ping
 from app.db.session import get_session, get_sessionmaker
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "get_session",
     "get_sessionmaker",
     "metadata",
+    "ping",
 ]

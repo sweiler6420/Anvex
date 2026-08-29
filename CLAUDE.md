@@ -181,7 +181,26 @@ Note that steps 5 and 6 both reuse step 4. **That reuse is the whole reason for 
 - **Constraint names:** `Base.metadata` carries a naming convention (`pk_` / `fk_` / `uq_` / `ix_` /
   `ck_`), so Postgres never invents a name Alembic cannot reproduce. Do not name constraints by
   hand unless one genuinely needs to differ.
-- **Errors:** services raise from `app/domain/errors.py`; middleware maps them to status codes.
+- **Errors:** services raise from `app/domain/errors.py`; `app/middleware/errors.py` is the only
+  place that maps them to HTTP. The mapping is the public contract: `AnvexError` → 500,
+  `ValidationError` → 422, `UnauthorizedError` → 401, `ForbiddenError` → 403, `NotFoundError` → 404,
+  `ConflictError` → 409, `ExternalServiceError` → 502 (we are up, the upstream is not).
+- **Error body:** *every* non-2xx response — domain error, pydantic 422, unknown-route 404, or an
+  unhandled crash — uses one shape, `app.schemas.errors.ErrorResponse`:
+  ```json
+  {"error": {"code": "not_found", "message": "stock 'AAPL' was not found.",
+             "details": {"resource": "stock", "identifier": "AAPL"}, "request_id": "8f1c…"}}
+  ```
+  All four keys are always present and `details` is `{}` rather than `null`, so a client indexes it
+  unconditionally and branches on `code`, never on `message`. A 500 always returns the fixed message
+  `"An unexpected error occurred."` with empty `details`; the traceback is logged, never returned.
+  API tests assert this shape — changing it is a breaking API change.
+- **Request ID:** every request carries `X-Request-ID` (the inbound one when it is a safe short
+  token, otherwise a generated UUID4). It is bound into the structlog context, echoed on the
+  response, and repeated as `error.request_id` so a reported failure maps to one log line.
+- **App:** `app.main.create_app(settings)` is the factory; `app = create_app()` is what uvicorn
+  imports. `/health` is liveness (no I/O) and `/health/ready` is readiness (`SELECT 1`, 503 on
+  failure); both are unversioned. Versioned routers are included in `app/api/v1/__init__.py`.
 - **Config:** `pydantic-settings` `Settings` object in `app/settings.py`, read once, injected via
   `deps`. Never `os.getenv` outside that module.
 - **Logging:** structured, request-id-tagged. No bare `print`.
