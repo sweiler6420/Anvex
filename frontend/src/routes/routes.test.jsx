@@ -3,6 +3,8 @@ import { render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { createAppRouter } from '@lib/router'
+import { AuthContext } from '@providers/AuthContext'
+import { ThemeProvider } from '@providers/ThemeProvider'
 
 /**
  * The route tree and its guards (ANV-27).
@@ -14,14 +16,28 @@ import { createAppRouter } from '@lib/router'
  *
  * A fresh router per test (`createAppRouter` is a factory, not a singleton) so a test that
  * navigates cannot decide where the next one starts.
+ *
+ * **The providers around it are ANV-28's doing.** The root route now renders `Layout`, so
+ * every route — including a refused one — mounts `Header`, which calls `useAuth()` and
+ * `useDarkMode()`. Both hooks throw by design when their provider is missing (ANV-25), so
+ * the shell has to be given one. The *same* `auth` object goes into the React context and
+ * the router context, which is what `App` does with `useAuth()`'s value in production; a
+ * second, differently-shaped stub would let the nav and the guards disagree in a way the
+ * app cannot.
  */
 function renderAt(path, { isAuthenticated = false } = {}) {
   const router = createAppRouter({ history: createMemoryHistory({ initialEntries: [path] }) })
   const auth = { isAuthenticated, login: vi.fn(), logout: vi.fn(), restore: vi.fn() }
 
-  render(<RouterProvider router={router} context={{ auth }} />)
+  render(
+    <ThemeProvider>
+      <AuthContext.Provider value={auth}>
+        <RouterProvider router={router} context={{ auth }} />
+      </AuthContext.Provider>
+    </ThemeProvider>,
+  )
 
-  return { router, location: () => router.state.location }
+  return { router, auth, location: () => router.state.location }
 }
 
 describe('protected routes', () => {

@@ -1,4 +1,6 @@
-import { Outlet, createRootRouteWithContext } from '@tanstack/react-router'
+import { createRootRouteWithContext } from '@tanstack/react-router'
+
+import Layout from '@components/layout/Layout'
 
 import NotFound from './NotFound'
 
@@ -12,9 +14,14 @@ import NotFound from './NotFound'
  * state: the router instance is created once and the auth object changes as the session
  * does.
  *
- * The component is a bare `<Outlet />` on purpose. **ANV-28 owns the shell** — `Layout`,
- * `Header`, the dark-mode switcher — and this is the element it wraps the outlet in. There
- * is nothing else to remove first.
+ * The component is `Layout` (ANV-28), which renders the `Header` and puts the `<Outlet />`
+ * in a `<main>`. It is declared **here**, on the root, rather than on each route, so every
+ * route sits under the shell — public ones included — exactly as the old app's
+ * `<Route path="/" element={<Layout/>}>` did. A visitor needs the header most when they are
+ * signed out, because that is where "Log In" lives.
+ *
+ * `notFoundComponent` renders **inside** `Layout` too, so a mistyped URL still has a way
+ * back that is not the browser's Back button.
  */
 export const rootRoute = createRootRouteWithContext()({
   /**
@@ -29,6 +36,6 @@ export const rootRoute = createRootRouteWithContext()({
    * Returning `{}` here means a param exists only where some route declared it.
    */
   validateSearch: () => ({}),
-  component: () => <Outlet />,
+  component: Layout,
   notFoundComponent: NotFound,
 })

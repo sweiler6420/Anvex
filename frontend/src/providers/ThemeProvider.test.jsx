@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useDarkMode } from '@hooks/useDarkMode'
 
-import { ThemeProvider, THEME_STORAGE_KEY } from './ThemeProvider'
+import { ThemeProvider } from './ThemeProvider'
+// ANV-28 moved the key (with the class names and the resolution rule) into
+// `themeStorage.js`, so the pre-paint script injected into `index.html` can be built from
+// the same constants. Deliberately *not* re-exported from `ThemeProvider.jsx`: there is one
+// spelling of `'theme'` in the repository, and one import path to it.
+import { THEME_STORAGE_KEY } from './themeStorage'
 
 /**
  * A probe that renders the whole context, so an assertion never has to reach into React.

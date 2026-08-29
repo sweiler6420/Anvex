@@ -2,6 +2,21 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      ANV-28. The `anvex-theme-pre-paint` plugin in vite.config.js replaces the marker below
+      with a blocking inline script that puts `light` or `dark` on <html> before the body is
+      parsed. Without it a dark-mode user sees Tailwind's unclassed light default until
+      React mounts and ThemeProvider's effect runs — a flash of white on every cold load.
+
+      It is injected rather than written out here so the storage key and the "a stored
+      choice wins, otherwise follow the OS" rule have exactly one home
+      (src/providers/themeStorage.js), which ThemeProvider imports as well. Two copies that
+      disagreed would make the page *flip* on mount, which is worse than the flash.
+
+      The marker is not optional: injectThemePrePaintScript() throws when it is missing, so
+      deleting this line fails the build rather than silently shipping the flash back.
+    -->
+    <!--anvex:theme-pre-paint-->
     <!-- SVG favicon first: browsers cache a stale .ico far more aggressively. -->
     <link rel="icon" type="image/svg+xml" href="/anvex-favicon.svg" />
     <link rel="apple-touch-icon" href="/logo192.png" />

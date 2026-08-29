@@ -5,7 +5,29 @@ import svgr from 'vite-plugin-svgr'
 import { loadEnv } from 'vite'
 import { defineConfig } from 'vitest/config'
 
+import { injectThemePrePaintScript } from './src/providers/themeStorage.js'
+
 const here = (p) => fileURLToPath(new URL(p, import.meta.url))
+
+/**
+ * Put the theme pre-paint script into `index.html` (ANV-28).
+ *
+ * The script has to be a **classic, blocking** `<script>` in `<head>`: `type="module"` is
+ * deferred by definition, which is precisely the delay that produces the flash of white.
+ * A classic script cannot `import`, so the alternative to this plugin is a second copy of
+ * the storage key and of the light/dark resolution rule, hand-written in an HTML file where
+ * nothing checks it against `ThemeProvider`. When those two disagree the page does not
+ * merely flash, it **flips** — visibly, a few hundred milliseconds in.
+ *
+ * So the script text is built from the same constants `ThemeProvider` imports, and the
+ * injection is a one-line call to a pure function that `themeStorage.test.jsx` runs against
+ * the real `index.html`. `transformIndexHtml` covers `vite dev` and `vite build` alike.
+ */
+const themePrePaintPlugin = () => ({
+  name: 'anvex-theme-pre-paint',
+  // `order: 'pre'` so the marker is gone before any other plugin reads the HTML.
+  transformIndexHtml: { order: 'pre', handler: injectThemePrePaintScript },
+})
 
 /**
  * The repo root, one level above `frontend/`.
@@ -33,6 +55,7 @@ export default defineConfig(({ mode }) => {
       // include is `**/*.svg?react`, so a plain `import url from './x.svg'` keeps
       // resolving to a URL and a ported import gains a `?react` suffix and nothing else.
       svgr(),
+      themePrePaintPlugin(),
     ],
 
     resolve: {

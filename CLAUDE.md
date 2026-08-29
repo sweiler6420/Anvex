@@ -1121,6 +1121,78 @@ as the first and only router.
   and the sign-out handler alike. Not to be confused with a *feature's* API path
   (`features/auth/api.js`'s `LOGIN_PATH` is `/v1/auth/login`).
 
+### The shell — layout, header, and anything that must run before the bundle (ANV-28)
+
+`components/layout/` owns `Layout`, `Header`, `DarkModeSwitcher` and the nav definitions.
+`Layout` is **`rootRoute.component`**, so every route renders inside it — public pages and the
+404 included. A visitor needs the header most when they are signed out, because that is where
+"Log In" is. `Layout` renders `Header`'s `<nav>` and a **sibling** `<main>`; the old shell put
+the header *inside* `<main>`, which makes the document's primary content contain the site
+navigation.
+
+- **An in-app destination is a `<Link>`, never an `<a href>`.** They produce the same `href`
+  and a completely different navigation: a bare anchor reloads the document, and a reload
+  discards the in-memory access token, so the old header's `<a href='/login'>` signed out
+  anyone who clicked it. An `href` assertion cannot tell the two apart — **click the link and
+  assert the router moved**, which is the test that fails on the old markup.
+- **A nav item's route comes from `@routes/paths` and its fragment is a `hash` prop.** A
+  marketing anchor (`/#pricing`) is a fragment *of* a route, not a route; `HOME_ROUTE` plus
+  `hash` keeps a rename to one edit. The item list is a plain `.js` module beside the header,
+  rendered by both the desktop bar and the drawer, so the two cannot drift the way two copies
+  of one `.map()` did.
+- **`activeOptions={{exact: true, includeHash: true}}` on every nav `Link`.** `Link` computes
+  "am I current" itself and writes both `aria-current="page"` and `activeProps` from it, so the
+  rule is set there rather than in a competing prop — and **both TanStack defaults are wrong
+  for a nav**: `exact: false` makes `/` a prefix of every route (Home stays underlined on
+  `/research`), and `includeHash: false` lights up every item that shares a route.
+- **A nav drawer is a *disclosure*, not a dialog, and the difference decides the dependency.**
+  Render the panel immediately after its toggle inside the same `<nav>` and natural tab order
+  already runs button → panel → page, which is the WAI-ARIA disclosure-navigation pattern —
+  and that pattern must **not** trap focus. Four things are then hand-written and each earns a
+  test: `aria-expanded` + `aria-controls` (a `useId`, not a literal), Escape closing it **and
+  returning focus to the toggle**, closing on a **location change** rather than on each link's
+  `onClick` (which misses a guard's redirect, a Back press and `onSignOut`), and no focus trap
+  at all. Reach for `@headlessui/react` when something is genuinely modal — a dialog, a
+  combobox, a command palette — not for six ARIA attributes on a panel that must stay
+  escapable. An **icon set is not that kind of dependency**: four inlined MIT `d` attributes in
+  `components/ui/icons.jsx` have no behaviour a library could get right.
+- **A toggle's accessible name says what pressing it *does*, and changes with the state.**
+  `aria-label='Toggle theme'` is the same name before and after, so the only thing a screen
+  reader could notice is a decorative glyph it cannot see. "Switch to dark theme" → press →
+  "Switch to light theme" announces itself.
+- **A component navigates or clears a session, never both.** The header's logout button calls
+  `useAuth().logout()` and nothing else: ANV-26 owns the tokens and `onSignOut` owns the
+  destination. The old header cleared `localStorage` itself *and* navigated, from its own
+  `onClick`, twice.
+- **Anything that must run before the bundle is one blocking classic script, generated from a
+  module.** A `type="module"` script is deferred by definition, so a pre-paint decision (the
+  theme class today) has to be a classic inline `<script>` in `<head>` — and a classic script
+  cannot `import`. Do **not** hand-write it into `index.html`: that is a second copy of a rule,
+  and a second copy that disagrees makes the page *flip* on mount, which is worse than the
+  flash it was added to fix. The shape is fixed:
+  1. the constants and the rule live in **one module** (`providers/themeStorage.js` — the theme
+     key, class names, media query and `resolveInitialTheme`), which the React provider imports;
+  2. the script **text** is built by interpolating those constants, and a pure
+     `injectXScript(html)` swaps it for a marker comment in `index.html`;
+  3. a two-line plugin in `vite.config.js` calls that function from `transformIndexHtml`, so
+     `vite dev` and `vite build` agree;
+  4. the injector **throws when the marker is missing**, so deleting the line fails the build
+     instead of silently shipping the regression back.
+- **Two implementations of one rule are kept honest by a shared-input equivalence test, not by
+  a comment.** Generated script text is still a second implementation of the *rule* even when
+  the constants are shared. Run both over a matrix of every input that distinguishes them —
+  for the theme, (stored value × OS preference), unrecognised and empty values included — and
+  assert they produce the **same** output, plus that the output is well-formed (exactly one
+  theme class, not merely "contains `dark`"). Interpolating the key catches a rename; only the
+  matrix catches an edit to the fallback.
+- **A drift test is a `.jsx` file even when the unit under test is `.js`** — esbuild will not
+  parse JSX in a `.js` file, and half of the comparison is a rendered React provider.
+- **A test that mounts the router now mounts the shell, so it needs the shell's providers.**
+  `ThemeProvider` and an `AuthContext.Provider` wrap `RouterProvider`, with the **same** `auth`
+  object in the React context and the router context — a second, differently-shaped stub would
+  let the nav and the guards disagree in a way the application cannot. `useAuth`/`useDarkMode`
+  throw outside their providers by design (ANV-25), so this is a failure, not a warning.
+
 ### Frontend test harness (ANV-23)
 
 The mirror of §6's backend rules: **extend the one setup file and the one MSW server; never start a
