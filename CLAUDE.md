@@ -260,6 +260,31 @@ Note that steps 5 and 6 both reuse step 4. **That reuse is the whole reason for 
   frontend parses those keys). **Every token carries a `type` claim** (`"access"` / `"refresh"`)
   and verifying a token means checking that claim as well as the signature, or an access token
   can be redeemed as a refresh token. A refresh token travels in a JSON body, never a query string.
+- **The token `type` check is enforced by the API's shape, not by a reminder.**
+  `app.domain.auth.decode_token` takes a keyword-only `expected_type` with **no default**, so a
+  caller that forgets it gets a `TypeError` at the call site rather than a renewal hole in
+  production; `decode_access_token` / `decode_refresh_token` pin it in their names. There is
+  deliberately no "just verify this token" entry point. Token failures are `TokenError` subclasses
+  of `UnauthorizedError` — `invalid_token` (malformed, tampered, wrong key or algorithm),
+  `token_expired`, `wrong_token_type` — so a client refreshes on expiry and re-authenticates
+  otherwise, while *why* a signature failed stays unsaid. **When a rule must not be forgotten,
+  make the signature require it.**
+- **Domain takes the clock as a parameter.** No module under `app/domain/` reads the clock, and
+  every function that needs the time takes `now` as a required keyword-only, **timezone-aware**
+  datetime (a naive one is a `ValueError`: `.timestamp()` would silently resolve it in the server's
+  local zone). The service reads the real clock **once** per operation and passes it down, so a
+  minted pair shares one `iat` and expiry is testable without a `sleep`. This applies to any
+  time-dependent rule, not just auth — and it means a domain module must not delegate a time check
+  back to a library either (`decode_token` disables `python-jose`'s own `exp` verification and
+  compares against the injected `now` itself). **A purity convention that lives only in prose gets
+  broken:** each domain module's unit tests parse its source and fail on a clock call or a
+  `fastapi`/`app.settings` import, the way `tests/unit/test_domain_auth.py` does.
+- **`app/utils/security.py` owns the bcrypt 72-byte boundary**, because it is the only layer that
+  knows the encoding: the schema cap is 72 *characters* and bcrypt's limit is 72 *bytes*, so a
+  25-character multibyte password passes validation and still overflows. `hash_password` **raises**
+  (a write we control — never persist a credential silently equal to its own prefix);
+  `verify_password` **returns `False`** and never raises, for an over-long candidate and for a
+  stored hash that is empty, foreign or corrupted. A broken hash fails one login, not the process.
 - **Lists return `Page[T]`, never a bare array.** `app.schemas.pagination.Page` is the one envelope:
   `{items, total, limit, offset, has_more}`, offset paging, `limit` bounded by `MAX_PAGE_LIMIT`.
   `total` counts every matching row, `has_more` is computed, and the two bounds are echoed so the

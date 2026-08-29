@@ -16,6 +16,14 @@ dependencies = [
     "httpx",
     "python-jose[cryptography]",
     "passlib[bcrypt]",
+    # bcrypt is capped below 4.1 because passlib 1.7.4 — its final release — cannot work
+    # with anything newer. passlib probes its bcrypt backend at first use by hashing a
+    # >72-byte secret; bcrypt 5.0 turned that silent truncation into a `ValueError`, so
+    # `CryptContext(schemes=["bcrypt"])` raises before it can hash anything at all. 4.1
+    # separately dropped `bcrypt.__about__`, which passlib reads for the backend version.
+    # The cap is compatibility only: `app/utils/security.py` enforces the 72-byte boundary
+    # itself, so nothing relies on a particular library's truncation behaviour.
+    "bcrypt>=4.0,<4.1",
     "python-multipart",
     "aioboto3",
     "structlog",

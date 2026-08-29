@@ -1,7 +1,9 @@
 """Pure Anvex business logic — no I/O of any kind (``CLAUDE.md`` §3).
 
-Only the error hierarchy lives here so far; ANV-10 onward add the auth, watchlist and
-indicator rules beside it.
+The error hierarchy is re-exported here for convenience. Rule modules — ``auth`` today,
+watchlist and indicator rules later — are reached by their own path
+(``from app.domain.auth import ...``) rather than re-exported, so importing an error does
+not drag in every rule module's dependencies.
 """
 
 from app.domain.errors import (
