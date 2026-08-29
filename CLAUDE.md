@@ -897,6 +897,58 @@ components ANV-28..36 port, invisibly. **v4 is its own ticket, after the ports l
 `src/styles/tailwind.test.js` runs the real PostCSS pipeline and asserts on the *generated CSS* —
 a design token that stops being emitted fails the suite rather than showing up as an unstyled screen.
 
+### The API client layer (ANV-24)
+
+`src/lib/api/` is the **transport**. It owns two axios instances, one error shape and one seam, and
+it owns no URLs beyond `/v1/auth/refresh`.
+
+- **Two instances, and which one a call uses is a security decision, not a style one.**
+  `publicApi` carries no credentials; `authApi` attaches the bearer token and refreshes it. The
+  refresh call itself goes out on **`publicApi`** — on `authApi` a 401 from `/v1/auth/refresh` would
+  re-enter the very interceptor awaiting it, which is a refresh that triggers a refresh.
+- **Refresh is single-flight, and the promise *is* the queue.** One module-level
+  `refreshInFlight`; every request that 401s while it is running awaits the same promise and then
+  replays itself with the token it resolves to. A separate subscriber array would add a window
+  between "a refresh is running" and "I am on its list" in which a second refresh could start. The
+  slot is cleared in a `finally` that first checks it still owns the slot. **This is not an
+  optimisation** — `/v1/auth/refresh` rotates and invalidates the token presented, so N concurrent
+  refreshes means N−1 of them present a spent token, get a 401, and log the user out. The old app
+  guarded with `prevRequest.sent`, a flag on *one request's config*, which is no guard at all.
+- **A concurrency guard needs a test that fails without it.** The MSW mock of the refresh endpoint
+  is **single-use**, exactly like the real one: it rotates the pair and refuses an already-spent
+  token. So removing the guard fails the test twice over — the refresh call *count* goes to N, and
+  N−1 requests reject with `invalid_token`. A mock that answered every refresh identically would
+  pass either way and prove nothing. Verify it by removing the guard and re-running, not by reading.
+- **401 refreshes, 403 does not.** The Anvex API returns 401 for missing/expired/malformed/wrong-type
+  tokens and 403 (`ForbiddenError`) for "authenticated, not permitted". Frame the rule as **refresh
+  on any 401 except `invalid_token` and `wrong_token_type`**, not "refresh only on `token_expired`":
+  a page reload holds a refresh token but no access token, so its first protected call is a 401
+  `unauthorized` — which is precisely the case a refresh exists to rescue. One retry per request,
+  flagged on the config, so a server that 401s a fresh token cannot loop.
+- **Only a *refusal* ends the session.** `clear()` is called when the refresh comes back 4xx, or when
+  a 401 arrives with a code refreshing cannot fix. A network failure or a 5xx during refresh rejects
+  and **keeps the tokens** — signing a user out because their connection blipped, or because the API
+  was restarting, discards credentials that are still valid.
+- **`ApiError` is the one failure shape, and a transport failure has a `code` like any other.**
+  `{code, message, details, requestId, status}`, all five always present, `details` `{}` and
+  `status` `null` — never `undefined`, never missing. The client-side codes (`network_error`,
+  `timeout`, `request_cancelled`, `malformed_response`, `unknown_error`) are **disjoint from every
+  code the backend emits**, and a test asserts that, so one `switch (err.code)` covers both origins
+  and nobody writes `if (!err.response)` again. A non-envelope body is `malformed_response` with the
+  real status — inferring a code from a proxy's HTML would be inventing one. Every failure is a
+  **rejection**; nothing returns `{status, message, error}` and leaves the caller to guess.
+- **The token seam: the transport reads tokens, the store owns them.** `lib/api/tokenStore.js`
+  exports `installTokenStore({getAccessToken, getRefreshToken, setTokens, clear})` and ships a
+  signed-out no-op default; `client.js` calls `getTokenStore()` **per request**, never at import.
+  So `client.js` contains neither `localStorage` nor React, the storage policy can change (session,
+  cookie, a native keychain when this is wrapped) without touching the transport, and there is one
+  copy of the token rather than two that drift. The shape is validated at install time, because a
+  store missing `setTokens` otherwise surfaces as a random logout mid-401. `setTokens` receives the
+  **whole rotated pair** — storing only the access token breaks the *next* refresh.
+- **`lib/api` is not an endpoint catalogue.** Per-resource modules live in each feature's `api.js`
+  and import `authApi`; there is deliberately no `lib/api/stocks.js`, which would collect every
+  feature's URLs in one shared module and undo the feature-first rule on the second consumer.
+
 ### Frontend test harness (ANV-23)
 
 The mirror of §6's backend rules: **extend the one setup file and the one MSW server; never start a
