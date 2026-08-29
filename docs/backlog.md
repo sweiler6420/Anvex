@@ -152,7 +152,20 @@ test asserting the `datetime` field shape the frontend charts consume.
 ### ANV-15 · Watchlists — reorder domain, service and routes · L · dep: ANV-14
 `app/domain/watchlist.py` — **pure** reordering: `reposition(items, stock_id, from_idx, to_idx)`
 returning new positions. The old implementation was index-vs-position confused and had an
-off-by-one on both branches; write this as a clean pure function and test it exhaustively.
+assumes `position == index`; write this as a clean pure function and test it exhaustively.
+
+The shift arithmetic itself is **correct** while positions are exactly `0..n-1` — do not go hunting
+for an off-by-one. What is actually wrong with the old handler:
+
+1. **No ownership check.** It filters `WatchlistData` by `watchlist_id` alone. `current_user` is
+   injected and never used, so any authenticated caller can reorder anybody's watchlist.
+2. **Unvalidated client indices.** `current_index` / `destination_index` arrive from the query
+   string and are used directly as list subscripts — out of range is an `IndexError` (a 500), and a
+   negative index silently wraps under Python semantics and moves the wrong row.
+3. **`stock_id` is accepted and never used.** The row that moves is whichever sits at
+   `current_index`, so a stale client view silently reorders the wrong stock.
+4. **It indexes a position-ordered list by index**, so it holds only while positions are contiguous
+   from zero. Nothing enforces that — ANV-7 deliberately left `position` non-unique.
 `app/services/watchlist.py` + `app/api/v1/watchlists.py` — create, list mine, get with ordered
 stocks, add stock (409 on duplicate), remove stock, reorder, delete. Every route enforces
 ownership by `current_user`.
@@ -366,7 +379,7 @@ reproduced:
 
 | Where | Old behaviour | New behaviour | Ticket |
 | --- | --- | --- | --- |
-| `watchlist.reposition` | index/position confusion, off-by-one on both branches | pure, exhaustively tested `reposition` | ANV-15 |
+| `watchlist.reposition` | no ownership check; unvalidated client indices used as list subscripts; `stock_id` ignored | pure, exhaustively tested `reposition` keyed on `stock_id`, ownership enforced | ANV-15 |
 | `watchlist_data` | fake PK via `__mapper_args__` | real composite primary key | ANV-7 |
 | `users` router | paths `'{id}'` with no slash; `get_user` declared `id` but read `user_id` | correct paths and params, plus `/me` | ANV-12 |
 | `stocks.ticker_symbol` | `VARCHAR(5)` | widened; many real tickers exceed 5 chars | ANV-7 |

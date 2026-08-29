@@ -624,3 +624,49 @@ the envelope's own validation and become a 500. `resolve_page_limit` was added t
 **Note for later tickets:** this FastAPI version does **not** flatten `include_router` into
 `app.routes` — included routers appear as opaque objects with no `.path`/`.routes`. Iterating
 `app.routes` to find mounted paths no longer works; read `app.openapi()["paths"]` instead.
+
+### ANV-14 — Done
+Commit `0f8ce67`, 14 files, 190 new tests (79 domain, 47 service unit, 46 API, 18 integration).
+**Verified independently:** `993 passed / 5 skipped` with `db-test` up, `780 passed / 218 skipped`
+with it stopped, ruff clean, all six chart-contract tests passing. 100% coverage on
+`app/domain/stock.py`, `app/domain/stock_data.py`, `app/services/stock_data.py`.
+
+**Routes are nested, overriding the backlog's sketch.** `GET /v1/stocks/{stock_id}/data` and
+`GET /v1/stocks/by-ticker/{ticker}/data` rather than `GET /v1/stock-data?ticker=…`. The argument:
+a candle series is not a top-level collection anybody browses — it is *this stock's* prices,
+`ON DELETE CASCADE`d with it and never queried across securities. Nesting means the parent cannot be
+omitted, a missing parent is a 404 from the URL itself, and the two ways of naming a security stay
+ANV-13's two rather than a third convention.
+
+**That surfaced a real bug in the old endpoint.** Its `search: Optional[str] = ""` default meant a
+bare `GET /v1/stock_data` returned *every* stock's candles interleaved in one date-ordered list —
+not a plottable series, and silently wrong rather than an error.
+
+**The domain rules** (`DateRange`, `PageWindow`, `CandleQuery`, `resolve_*`): bounds inclusive at
+both ends; an inverted range (`start > end`) is a **422, not a silently empty 200**, because the
+caller has a bug and an empty page hides it; `start == end` is a single trading day. A `datetime`
+bound is narrowed to `.date()` — **`datetime` subclasses `date`**, so it passes every type check and
+would otherwise compare against a `DATE` column, making `16:00 Mon → 09:30 Mon` read as an inversion
+rather than one day. Deliberately **no span cap and no clock**: paging already bounds the response,
+and "is this range in the future" needs an exchange-to-timezone map that does not exist.
+
+**Live candle, showing both halves of the chart contract:**
+```json
+{"open_price":"1234.0678","close_price":"1234.5678","volume":2048,
+ "stock_id":"8d8b495a-…","datetime":"2026-01-05T09:30:00"}
+```
+Naive `datetime` (no `Z`, no offset), prices as quoted strings with the fourth decimal intact. The
+API tests assert on **raw response text** rather than parsed floats, and the test carrying the
+`tzinfo is None` assertion also carries the "do not fix this" explanation.
+
+**`normalise_ticker` moved down, not sideways.** ANV-13 put it in `app/services/stock.py`; a second
+service needing it would have meant two services importing each other. It now lives in
+`app/domain/stock.py` and is re-exported from its old home, with a test asserting the re-export is
+the same object — so ANV-13's import path and tests are untouched.
+
+**A deliberate omission worth knowing:** the ticker route does not call
+`StockDataRepo.list_for_ticker`. The service must resolve the stock anyway to produce the 404, and
+once it holds the row it holds `stock_id` — the leading column of the `(stock_id, date, time)`
+index. Joining `stocks` a second time would be work for nothing. `FakeStockDataRepo` therefore
+implements only `list_for_stock` and is deliberately unable to distinguish an unknown stock from an
+empty one, which is what makes a service that skipped the parent lookup fail.

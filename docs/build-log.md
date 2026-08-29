@@ -70,10 +70,11 @@ modified. What each contributes to Anvex:
 | ANV-42 | Drop passlib, hash with bcrypt directly | **Done** *(inserted — Stephen's call)* |
 | ANV-12 | Users service and routes | **Done** — *E3 Auth complete* |
 | ANV-13 | Stocks service and routes | **Done** |
-| ANV-14 | Stock data service and routes | Next |
-| ANV-15 … ANV-41 | see `backlog.md` | Not started |
+| ANV-14 | Stock data service and routes | **Done** |
+| ANV-15 | Watchlists — reorder domain, service and routes | Next |
+| ANV-16 … ANV-41 | see `backlog.md` | Not started |
 
-**803 tests** passing with `db-test` up (608 with it stopped, DB tier skipping), 90% coverage.
+**993 tests** passing with `db-test` up (780 with it stopped, DB tier skipping), 91% coverage.
 
 ---
 
@@ -81,17 +82,6 @@ modified. What each contributes to Anvex:
 
 Only what is still outstanding. Once a ticket consumes one of these, delete it — the full record
 stays in [`ticket-log.md`](./ticket-log.md).
-
-**For ANV-14 (stock data):**
-- `StockDataPoint.from_row(row)` already exists (ANV-8) and does the `date` + `time` → `datetime`
-  recombination. Call it; do not re-derive it in the service.
-- That `datetime` is **naive on purpose** — `stock_data.time` is the exchange's local clock, so
-  stamping `+00:00` on 09:30 ET would move every candle. It is the only datetime in the API without
-  an offset. Assert `tzinfo is None` so it does not look like a bug to the next reader.
-- Prices are `Decimal` and serialise as **quoted JSON strings** (`"1234.5678"`). Assert the string
-  form, not `float` equality.
-- Copy ANV-13's `Page[T]` recipe verbatim: `resolve_page_limit` in the service, `(rows, total)` from
-  the repo, `Query(ge=1, le=MAX_PAGE_LIMIT)` on the route.
 
 **For ANV-15 (watchlists) — the two that matter most:**
 - **Ownership is the service's job.** The repo layer deliberately provides no "owned by user" query.
@@ -102,6 +92,15 @@ stays in [`ticket-log.md`](./ticket-log.md).
   `(max_position or -1) + 1` is a rule and belongs in `app/domain/watchlist.py`.
 - `position` is deliberately **not** unique per watchlist, so `set_positions` can apply a mid-swap
   state in one flush.
+- **Parent-resolution shape from ANV-14 transfers directly:** resolve the watchlist first, then page
+  its entries — unknown parent 404, known parent with no rows is an empty 200. The difference is
+  that a watchlist *is* owned, so the 404-not-403 rule stacks on top; a stock has no owner and its
+  404 is the plain kind.
+- Reuse `resolve_window` from `app/domain/stock_data.py` (it is generic) rather than re-deriving
+  offset handling, and follow `resolve_candle_query`'s division of labour: one small pure `resolve_*`
+  called once at the top of the service method, returning a frozen value the rest reads. **Validate
+  input before checking existence**, so a malformed request never reveals whether an id is real.
+- API tests need **two accounts in `FakeUserRepo`** to prove ownership isolation with no database.
 
 **For ANV-22 (ingest):**
 - `bulk_upsert` is a Core statement — it does **not** update the session's identity map. Re-read or
