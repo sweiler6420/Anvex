@@ -20,6 +20,7 @@ handoff document. Pair it with [`backlog.md`](./backlog.md) (the ticket specs) a
 | --- | --- |
 | `uv` at `C:\Users\sweil\.local\bin\uv.exe`, **not on PATH** | prepend it in every Python command block |
 | Stale `VIRTUAL_ENV` → `AverageInvestorApi\venv` | must be cleared (`$env:VIRTUAL_ENV = $null`) or uv targets the wrong env |
+| **A native `postgresql-x64-18` service owns host port 5432** (auto-start, PID confirmed) | compose publishes `db` on **5442**. On Windows the native server *and* Docker's proxy both bind 5432 successfully, so a host client silently reaches the wrong database with no error |
 | **`uv run pytest` is blocked by an Application Control policy** (`os error 4551`) | always use `uv run python -m pytest`; `uv run ruff` is fine |
 | No `node` / `npm` installed | all frontend tooling runs **inside Docker** |
 | `gh` CLI installed 2026-08-28, on the *user* PATH | only shells started afterwards resolve it; older ones need the full path |
@@ -53,8 +54,9 @@ modified. What each contributes to Anvex:
 | ANV-2 | Backend uv project and settings | **Done** |
 | ANV-3 | Async database layer and Alembic | **Done** |
 | ANV-4 | App factory, middleware and error contract | **Done** |
-| ANV-5 | Docker Compose stack and backend Dockerfile | Next |
-| ANV-6 … ANV-41 | see `backlog.md` | Not started |
+| ANV-5 | Docker Compose stack and backend Dockerfile | **Done** |
+| ANV-6 | Pytest harness | Next |
+| ANV-7 … ANV-41 | see `backlog.md` | Not started |
 
 ### ANV-1 — Done
 Commits `0ccc0df`, `9ae4224` on `main`.
@@ -184,3 +186,42 @@ with the middleware de-duplicating.
 - The `app` fixture builds a fresh instance per test so `dependency_overrides` cannot leak.
 - `ERROR_BODY_KEYS` in `tests/api/test_middleware.py` is the canonical assertion set — worth
   promoting to a shared helper when the harness lands.
+
+### ANV-5 — Done
+Commit `2aa2ba4`, 6 files. **Verified independently:** 138 passed / 6 skipped, ruff clean, and no
+leftover containers, volumes or networks after teardown. The agent's own run showed the API
+`healthy`, `/health` 200, `/health/ready` `{"status":"ok","database":"ok"}` 200, and
+`alembic upgrade head` succeeding **inside** the container.
+
+- `backend/Dockerfile` — two stages on `python:3.12-slim-bookworm`, uv copied from
+  `ghcr.io/astral-sh/uv`. Deps install from `pyproject.toml` + `uv.lock` before any source is
+  copied, with a BuildKit cache mount. Non-root `anvex` (uid 1000). `HEALTHCHECK` on `/health`
+  using stdlib `urllib` — no curl, so no apt layer at all. **432 MB final.**
+- Two decisions that matter: the venv lives at **`/opt/venv`, not `/app/.venv`**, because the dev
+  service bind-mounts `./backend` over `/app` and would otherwise both hide it and shadow it with
+  the host's Windows-built `.venv`; and `--no-install-project` means source is imported from the
+  working directory, which is what makes bind-mount + `--reload` work with no reinstall.
+- `docker-compose.yml` — `db` (5442), `db-test` (5433, **tmpfs, no volume**), `redis`, `minio` +
+  `minio-init`, `api` (8000). `worker`/`beat` sit behind a `celery` profile and `web` behind a
+  `frontend` profile, so a plain `docker compose up` never starts them and no Celery app was
+  invented ahead of ANV-21. `worker`/`beat` also set `healthcheck: disable: true` — they inherit
+  the API image, whose healthcheck polls `:8000/health`, and a worker serving no HTTP would sit
+  permanently unhealthy.
+
+**The real problem it found:** the first compose test failed with
+`InvalidPasswordError: password authentication failed for user "anvex"` against `localhost:5432`
+while the API *inside* the network was perfectly healthy. `netstat` showed two listeners on
+`0.0.0.0:5432` — the host's native `postgresql-x64-18` service and Docker's proxy. On Windows both
+bind successfully and the host client silently reaches the wrong server. Hence `db` on 5442.
+
+**Carried into ANV-6:**
+- `db-test` is `localhost:5433` from the host, `db-test:5432` inside the network. Credentials are
+  the shared `POSTGRES_USER`/`POSTGRES_PASSWORD`; the database is `POSTGRES_TEST_DB=anvex_test`.
+- `Settings` has **no test-DSN field yet** — `postgres_host`/`port`/`db` still point at the app
+  database, so the harness must build the test DSN itself (new settings fields or an override
+  fixture). Deliberately left as ANV-6's call.
+- `db-test` is tmpfs-backed with no named volume, so every start runs `initdb`: it has no `anvex`
+  schema and no `alembic_version`. The harness must run migrations itself.
+- **Do not default the test database to port 5432.** See above.
+- The opt-in pattern is established: `ANVEX_COMPOSE_TEST=1` gates Docker-dependent tests, and
+  `CLAUDE.md` §6 now requires the default suite to run with the daemon stopped.
