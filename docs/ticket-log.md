@@ -1488,3 +1488,57 @@ not have.
 
 15 mutations run, including ANV-29's signature result reproduced: the `<div role="button">` shim
 fails **exactly one** test, the keyboard one.
+
+### ANV-31 — Done
+Commit `4bfc791`, 7 files, 26 new tests (316 → **342**). **Verified independently:** 342 pass, lint
+clean.
+
+**`/unauthorized` is a destination with no trigger, and the page now says so.** Three checkable
+facts: no roles or permission claim exist anywhere (JWT claims are `sub`/`exp`/`iat`/`type`); **no
+service in `backend/app/` raises `ForbiddenError`**, so the 403 mapping is unreached; and §4 answers
+"real but not yours" with a **404**, deliberately. Nothing in the frontend navigates here or branches
+on `code === 'forbidden'`. *I verified the `ForbiddenError` claim myself — it is defined and mapped
+to 403, and raised nowhere.* So the old copy ("You do not have access to the requested page")
+describes a permission system this app does not have and sends the reader looking for an
+administrator who does not exist. The new page says Anvex has no roles and that landing here from
+inside the app **is a defect worth reporting rather than a setting to change** — with a test
+asserting both what it says and what it must not say.
+
+**The auto-redirect was dropped, not repaired.** ANV-30's navigation exception is for a transition
+*no guard could own*; recovery produces no session, changes no route's admissibility, and leaves the
+user where they chose to be — there is no transition at all. Three seconds is also a guess about
+reading speed that **moves the page out from under a screen-reader user mid-announcement** of the
+`role="status"` confirmation. What the redirect was *for* is a link, and a permanent
+`<Link>Back to Log In</Link>` rendered in **both** states is available at every moment instead of at
+second three. There is no `setTimeout` in the file.
+
+The old cleanup effect was **deleted, not fixed**. Its dependency did fire every render, but a
+stable `setError` is not the answer — the effect only existed because the failure lived in a
+provider that outlived the page. A failed recovery is local state now, so unmount discards it for
+free. `RecoveryPage` has **no `useEffect` at all**.
+
+**The identical-response property is proved in three layers**, and the third is the one that
+protects it: the page ignores the 202 body entirely (so sameness is true *by construction*); a
+contract test compares `outerHTML` across two **different** usernames with `useId` tokens blanked,
+and asserts both names were actually submitted — load-bearing, or it would pass having sent the same
+one twice; and an **independence** test sends the same username with two *different* bodies (the
+real one, and a hypothetical regression echoing the address) and asserts identical UI plus
+`not.toContain('ada@example.com')`. The form is *replaced* on success rather than disabled, which is
+what makes the comparison possible at all — nothing on screen after a submit came from the user or
+the wire.
+
+**A fake-timer ordering insight worth keeping:** timers must be installed **before** the submit.
+`vi.useFakeTimers()` afterwards cannot fail, because a `setTimeout` already scheduled on the real
+clock is not advanced by a fake one installed later. And the mutation table shows the two timer
+tests are not redundant: **M4** (uncleared redirect — the actual old bug) fails *both*; **M5** (the
+same redirect, correctly cleared) fails only the mounted one. So the post-`unmount()` test is
+precisely the cleanup isolator. No `console.error` spy anywhere — React 18 does not warn.
+
+**It fixed a non-discriminating test rather than deleting it.** The full-`App` test initially caught
+nothing, because a 3-second redirect never fires inside a 200 ms test. It now carries fake timers,
+so it proves no redirect against the **real browser history** — something the memory-router test
+structurally cannot show. It also added two targeted mutations (M20, M21) for tests that had only
+been caught incidentally, and recorded the same honest `request_cancelled` gap ANV-30 did.
+
+**21 mutations, every one caught.** Notably M17 (removing `htmlFor`) fails **16** tests — the field
+loses its accessible name and nothing can find it.

@@ -87,14 +87,14 @@ modified. What each contributes to Anvex:
 | ANV-28 | Layout, header and dark-mode switcher | **Done** — *frontend foundation complete* |
 | ANV-29 | Login page | **Done** |
 | ANV-30 | Sign-up page | **Done** |
-| ANV-31 | Recovery and Unauthorized pages | Next |
-| ANV-32 … ANV-41 | see `backlog.md` | Not started |
+| ANV-31 | Recovery and Unauthorized pages | **Done** |
+| ANV-32 | Home marketing page | Next |
+| ANV-33 … ANV-41 | see `backlog.md` | Not started |
+| ANV-43 | Backend password strength policy | Backlog — *found by ANV-30, high priority* |
 
-**316 frontend tests** passing in-container, lint clean. Backend: 2,811. **Total: 3,127.**
-
-**2,811 tests** passing with the full stack up (2,497 with Docker stopped — DB, S3 and broker tiers
-skip), 99% coverage. `ruff check` and `ruff format --check` clean across 176 files.
-Container tiers genuinely execute: **276 DB**, **29 S3**, **9 broker**.
+**3,153 tests total** — **2,811 backend** (2,497 with Docker stopped, DB/S3/broker tiers skipping)
+and **342 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check`
+and `eslint` all clean. Container tiers genuinely execute: **276 DB**, **29 S3**, **9 broker**.
 
 `AverageInvestorService` is now fully replaced and can be deleted. Two things it did that Anvex
 does not yet: **deep historical backfill** (its 43-month sweep — `ingest_month` accepts any explicit
@@ -304,22 +304,6 @@ on success — the guard is already unmounting the page.
   neither `key` nor `__TSR_key` on it, so a hand-made `window.history.replaceState` fixture must
   include them. A real `navigate({state})` already does; this only bites test rigs.
 
-**For ANV-31 (recovery + unauthorized):**
-- **`requestRecovery({username})` and `RECOVERY_PATH` already exist and are tested** in
-  `features/auth/api.js` — do not write a second one. `register()` is beside it; note it is JSON,
-  unlike login's form encoding.
-- **Recovery must NOT copy ANV-30's navigation exception.** That exception is narrow: sign-up
-  creates no session, so no guard could own the transition. Recovery has nowhere to go — it stays
-  put and shows the 202 message.
-- **There is nothing to branch on.** `POST /v1/auth/recovery` returns **202 with a fixed body for
-  every username**, existing or not (§4's anti-enumeration rule — the old `/v1/recovery` answered
-  404 with the username echoed back). The page must render the same thing every time and infer
-  nothing. **A test should assert the unknown-account and known-account responses produce
-  byte-identical UI.**
-- Recovery has no 409, so everything is the banner — there is no `conflictedField` analogue.
-- **`/unauthorized` is ticketed ANV-32, not ANV-31** (`routes/unauthorized.jsx` says `ticket="ANV-32"`).
-  Testids: `route-recovery`, `route-unauthorized`.
-
 **Open backend gap found by ANV-30 (needs its own ticket):** the API enforces password **length**
 (7–72) and **nothing else**. `app/schemas/user.py` says strength "belongs in `app/domain/`" and **no
 such rule was ever written**. The four client-side rules are therefore not a mirror of a server rule
@@ -353,3 +337,18 @@ such rule was ever written**. The four client-side rules are therefore not a mir
 - **`download_url` exists but no route mounts it** — whether a presigned URL should leave the API is
   an open decision, not an oversight.
 
+
+**For ANV-32 (Home marketing page):**
+- **`/unauthorized` is NOT yours** — ANV-31 owns it and it is done. (Its placeholder said `ANV-32`;
+  that was an ANV-27 error.)
+- **The scroll-spy question is yours.** ANV-28 did not port the old header's ~80-line
+  `IntersectionObserver` + scroll listener, because jsdom has neither layout nor the observer and
+  its sections did not exist yet. Active state currently comes from the router location via
+  `NAV_ACTIVE_OPTIONS`; the `features` / `workflow` / `pricing` / `contact` fragment ids the header
+  links to **arrive with your sections**. Decide whether to bring scroll-spy back and how you would
+  test it.
+- **The skip-link decision is yours** (ANV-28 deferred it): `<a href="#main-content">` would push a
+  hash into the location the header reads for "which nav item is current", so pressing skip
+  un-highlights the nav. `<main id="main-content">` already exists.
+- Keep the `route-home` testid; a page component belongs in `features/`, not `routes/` — the
+  case-collision rule is in §5.
