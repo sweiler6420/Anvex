@@ -150,6 +150,33 @@ or scalars.
 - A repo does not commit — the caller (service) owns the transaction boundary.
 - A repo contains no business rules, no HTTP concepts, no `HTTPException`.
 - **If you typed `select(` outside `app/repos/`, it is in the wrong file.**
+- **A repo takes a session; it never holds one.** Every method's first argument is the
+  `AsyncSession`, so a repo instance is stateless and shareable — each module exports a
+  ready-made one (`user_repo`, `stock_repo`, …) beside its class. A repo that stored a
+  session would have to be constructed per request and could outlive the transaction it
+  captured.
+- **Every repo subclasses `app.repos.base.BaseRepo[Model]`**, which owns add/update/delete
+  (each ending in `flush()`, never `commit()`) and the `_one_or_none` / `_all` / `_count` /
+  `_page` / `_exists` query helpers. Do not re-derive pagination or an existence check.
+- **Method naming is uniform across the package:** `get_*` returns one model or `None`;
+  `list_*` returns `(rows, total)` when paginated and `list[Model]` when not; `count_*` and
+  `max_*` return scalars; `*_exists` returns `bool`; `create*`/`add_*` insert and flush;
+  `update`/`set_*` mutate and flush; `delete*`/`remove_*` delete and flush; `bulk_upsert`
+  is `INSERT ... ON CONFLICT DO UPDATE` returning a row count.
+- **A paginated repo method returns `(rows, total)`, not a `Page`.** `total` is counted
+  before the window, so an offset past the end yields `([], total)`. Building the envelope
+  is the service's job — a repo does not import `app.schemas`, which is also why `limit` is
+  a required keyword argument rather than defaulting to `DEFAULT_PAGE_LIMIT`.
+- **Every relationship a caller will touch is named in `.options(selectinload(...))`** by
+  the query that loads it; lazy loading raises `MissingGreenlet` under asyncio. Where the
+  eager load is optional it is a *separate method* (`get_by_id` vs `get_with_entries`),
+  never a boolean flag.
+- **Idempotent bulk writes are `INSERT ... ON CONFLICT DO UPDATE` on a real constraint**,
+  never read-then-write. The caller deduplicates the batch first (Postgres rejects a
+  statement that hits one conflict target twice) and re-reads afterwards if it still holds
+  ORM objects — a Core statement does not update the identity map.
+- **A uniqueness check takes an `exclude_*_id`**, so the same method serves a create ("is
+  it taken") and an update ("is it taken by somebody else").
 
 ### `app/schemas/` — pydantic contracts
 Request and response models, split as `XCreate` / `XUpdate` / `XOut`. Pydantic v2
