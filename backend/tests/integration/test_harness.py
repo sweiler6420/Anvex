@@ -7,34 +7,30 @@ lying. They run against the compose ``db-test`` service and **skip** when it is 
 They are ordered on purpose. ``test_a_*`` writes rows; ``test_z_*`` asserts they are gone.
 Read them top to bottom.
 
-ANV-7 note: this module writes to the temporary ``scratch_table`` fixture because
-``app/models/`` is still empty. Rewrite it against a real model and factory, and delete the
-fixture, when the first model lands.
+Since ANV-7 the writes go through a real model and its factory rather than a throwaway
+scaffold table (the ``scratch_table`` fixture is gone). That matters twice over: the table
+now comes from the migrations the harness runs, so the isolation proof and the schema under
+test are the same thing, and the factory gets exercised on every run.
 """
 
 from __future__ import annotations
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-ROLLED_BACK_LABEL = "written-without-committing"
-COMMITTED_LABEL = "written-and-committed"
+from app.models import User
+from tests.factories import UserFactory
+
+#: `users` is the stand-in for "any real table": it is created by ANV-7's migration, it
+#: outlives every test's transaction, and it has a unique column to violate.
+COUNT_USERS = select(func.count()).select_from(User.__table__)
 
 
-async def _count(session: AsyncSession, table: str, label: str | None = None) -> int:
-    statement = f"SELECT count(*) FROM {table}"
-    params: dict[str, str] = {}
-    if label is not None:
-        statement += " WHERE label = :label"
-        params["label"] = label
-    return int(await session.scalar(text(statement), params) or 0)
-
-
-async def _insert(session: AsyncSession, table: str, label: str) -> None:
-    await session.execute(text(f"INSERT INTO {table} (label) VALUES (:label)"), {"label": label})
+async def _user_count(session: AsyncSession) -> int:
+    return int(await session.scalar(COUNT_USERS) or 0)
 
 
 class TestSchema:
@@ -46,25 +42,29 @@ class TestSchema:
         assert await db_session.scalar(text("SELECT to_regclass('anvex.alembic_version')"))
 
     async def test_exactly_one_revision_is_stamped(self, db_session: AsyncSession) -> None:
-        """`upgrade head` ran once and completed — a partial run leaves zero rows."""
+        """`upgrade head` ran to completion — a partial run leaves zero rows."""
         assert await db_session.scalar(text("SELECT count(*) FROM anvex.alembic_version")) == 1
 
     async def test_pgcrypto_is_usable(self, db_session: AsyncSession) -> None:
         """Every UUID primary key defaults to `gen_random_uuid()`, so this is load-bearing."""
         assert await db_session.scalar(text("SELECT gen_random_uuid()")) is not None
 
+    async def test_the_model_tables_exist(self, db_session: AsyncSession) -> None:
+        """`upgrade head` reached ANV-7's revision, not merely the bootstrap."""
+        assert await _user_count(db_session) == 0
+
 
 class TestRollbackIsolation:
     """A write, a committed write, and then the proof that neither survived."""
 
     async def test_a_plain_write_is_visible_within_its_own_test(
-        self, db_session: AsyncSession, scratch_table: str
+        self, db_session: AsyncSession
     ) -> None:
-        await _insert(db_session, scratch_table, ROLLED_BACK_LABEL)
-        assert await _count(db_session, scratch_table, ROLLED_BACK_LABEL) == 1
+        await UserFactory().create(db_session)
+        assert await _user_count(db_session) == 1
 
     async def test_a_committed_write_is_visible_within_its_own_test(
-        self, db_session: AsyncSession, scratch_table: str
+        self, db_session: AsyncSession
     ) -> None:
         """`session.commit()` behaves normally — every service in this codebase calls it.
 
@@ -72,33 +72,29 @@ class TestRollbackIsolation:
         rather than committing the outer transaction, so the row is real for the rest of
         this test and gone for the next one.
         """
-        await _insert(db_session, scratch_table, COMMITTED_LABEL)
+        await UserFactory().create(db_session)
         await db_session.commit()
-        assert await _count(db_session, scratch_table, COMMITTED_LABEL) == 1
+        assert await _user_count(db_session) == 1
 
-    async def test_repeated_commits_keep_working(
-        self, db_session: AsyncSession, scratch_table: str
-    ) -> None:
+    async def test_repeated_commits_keep_working(self, db_session: AsyncSession) -> None:
         """A service may commit several times in one request; the savepoint must restart."""
-        for index in range(3):
-            await _insert(db_session, scratch_table, f"{COMMITTED_LABEL}-{index}")
+        for _ in range(3):
+            await UserFactory().create(db_session)
             await db_session.commit()
-        assert await _count(db_session, scratch_table) == 3
+        assert await _user_count(db_session) == 3
 
     async def test_a_rollback_inside_a_test_does_not_break_the_session(
-        self, db_session: AsyncSession, scratch_table: str
+        self, db_session: AsyncSession
     ) -> None:
         """A service that catches a constraint violation and rolls back stays usable."""
-        await _insert(db_session, scratch_table, "duplicate")
+        user = await UserFactory().create(db_session)
         await db_session.commit()
         with pytest.raises(IntegrityError):
-            await _insert(db_session, scratch_table, "duplicate")
+            await UserFactory().create(db_session, email=user.email)
         await db_session.rollback()
-        assert await _count(db_session, scratch_table, "duplicate") == 1
+        assert await _user_count(db_session) == 1
 
-    async def test_z_none_of_the_above_survived(
-        self, db_session: AsyncSession, scratch_table: str
-    ) -> None:
+    async def test_z_none_of_the_above_survived(self, db_session: AsyncSession) -> None:
         """**The isolation proof.**
 
         This test runs on a *different* connection from the ones above, so it can only see
@@ -106,15 +102,36 @@ class TestRollbackIsolation:
         every write in this class — including the explicitly committed ones — was undone
         when its test's outer transaction rolled back.
         """
-        assert await _count(db_session, scratch_table) == 0
+        assert await _user_count(db_session) == 0
 
-    async def test_z_and_an_independent_connection_agrees(
-        self, db_engine: AsyncEngine, scratch_table: str
-    ) -> None:
+    async def test_z_and_an_independent_connection_agrees(self, db_engine: AsyncEngine) -> None:
         """Belt and braces: ask outside the harness's session entirely."""
         async with db_engine.connect() as connection:
-            total = await connection.scalar(text(f"SELECT count(*) FROM {scratch_table}"))
-        assert total == 0
+            assert await connection.scalar(COUNT_USERS) == 0
+
+
+class TestFactoriesAgainstTheDatabase:
+    """The two factory rules (`CLAUDE.md` §6) hold against real constraints, not in theory."""
+
+    async def test_a_factory_flushes_so_server_defaults_are_populated(
+        self, db_session: AsyncSession
+    ) -> None:
+        user = await UserFactory().create(db_session)
+        assert user.user_id is not None, "flush() must have returned the gen_random_uuid()"
+        assert user.created_at is not None
+
+    async def test_a_factory_does_not_commit(self, db_session: AsyncSession) -> None:
+        """After `create()` the work is still in flight — the caller owns the boundary."""
+        await UserFactory().create(db_session)
+        assert db_session.in_transaction()
+
+    async def test_sequence_derived_columns_survive_a_unique_constraint(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Twenty users in one test — the exact case `fake.email()` would fail."""
+        users = await UserFactory().create_many(db_session, 20)
+        assert len({user.email for user in users}) == 20
+        assert await _user_count(db_session) == 20
 
 
 class TestDbClient:
@@ -129,9 +146,9 @@ class TestDbClient:
         assert response.json() == {"status": "ok", "database": "ok"}
 
     async def test_the_request_and_the_test_share_one_session(
-        self, db_client: AsyncClient, db_session: AsyncSession, scratch_table: str
+        self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         """A row created by the test is visible to the handler, and vanishes afterwards."""
-        await _insert(db_session, scratch_table, "seen-by-the-handler")
+        await UserFactory().create(db_session)
         assert (await db_client.get("/health/ready")).status_code == 200
-        assert await _count(db_session, scratch_table, "seen-by-the-handler") == 1
+        assert await _user_count(db_session) == 1

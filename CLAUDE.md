@@ -127,6 +127,21 @@ Declarative table definitions and relationships. Persistence shape only. **No me
 business logic** — that is `domain/`. One module per table group; export via `models/__init__.py`
 so Alembic autogenerate sees everything.
 
+- **SQLAlchemy 2.0 typed declarative only**: `Mapped[...]` annotations with `mapped_column(...)`.
+  No `Column()`, no `__mapper_args__` standing in for a real key.
+- Subclass `app.db.base.Base` and nothing else. `Base.metadata` already carries
+  `schema="anvex"`, so **never** set `__table_args__ = {"schema": ...}` on a model.
+- **Every foreign key states its `ondelete`.** Omitting it is a decision by default: the
+  dependent rows simply block the parent's deletion. Pick `CASCADE` when the child is part of
+  the parent (a candle, a watchlist, a membership row) and `RESTRICT` when the parent is
+  reference data somebody depends on. Mirror it on the relationship with
+  `passive_deletes=True` (DB-side cascade) or `passive_deletes="all"` (DB-side restrict), or
+  the ORM will load the children and try to rewrite them first.
+- Timestamps are `DateTime(timezone=True)` with a server default. Never a naive `TIMESTAMP`.
+- Type annotations tell the truth about what comes back: `Mapped[Decimal]` for `Numeric`,
+  `Mapped[uuid.UUID]` for a UUID key, `Mapped[X | None]` exactly when the column is nullable.
+  ANV-8's schemas are generated against these, so a lie here becomes a lie in the API.
+
 ### `app/repos/` — data access
 The **only** place SQLAlchemy queries are written. One repo class per aggregate
 (`UserRepo`, `StockRepo`, `WatchlistRepo`). Each method takes an `AsyncSession` and returns models
@@ -178,6 +193,15 @@ Note that steps 5 and 6 both reuse step 4. **That reuse is the whole reason for 
   Never use `Base.metadata.create_all` outside tests. `backend/alembic.ini` + `app/db/migrations/`;
   `env.py` is async and reads the URL from `get_settings()`, never from `alembic.ini`, and alembic's
   own `alembic_version` table lives in the `anvex` schema with everything else.
+- **`alembic check` must report "No new upgrade operations detected."** That is the contract
+  between `app/models/` and `app/db/migrations/`: a hand-edited migration that has drifted from
+  the models fails it, and the test suite asserts it too. Autogenerate output is a draft —
+  review and reformat it, but never change what it *does* without re-running the check.
+- **Alembic's connection pins `search_path` to `public`** (`ENGINE_CONNECT_ARGS` in `env.py`).
+  The login role is also called `anvex`, so Postgres' stock `"$user", public` search path made
+  `anvex` the *default* schema — and alembic represents the default schema as `None`, which
+  broke reflection, every foreign key comparison and the `alembic_version` exclusion. Do not
+  remove the pin: without it autogenerate can never be empty.
 - **Constraint names:** `Base.metadata` carries a naming convention (`pk_` / `fk_` / `uq_` / `ix_` /
   `ck_`), so Postgres never invents a name Alembic cannot reproduce. Do not name constraints by
   hand unless one genuinely needs to differ.
@@ -313,9 +337,13 @@ migrates `db-test`), `tests/helpers.py` (shared assertions and stubs), `tests/fa
 - **Assert error bodies with `assert_error_envelope`** from `tests/helpers.py`, and keep a
   session-taking route off Postgres with `override_session(app, StubSession(...))` from the same
   module. `ERROR_BODY_KEYS` is defined there once.
-- **Factories:** one `Factory` subclass per model in `tests/factories/`, `@register`ed. Unique
-  columns come from `self.sequence()`, never from faker (seeding resets per test, so faker repeats
-  within one test). A factory flushes; it never commits.
+- **Factories:** one `Factory` subclass per model in `tests/factories/`, `@register`ed and
+  re-exported from `tests/factories/__init__.py` so tests write `from tests.factories import
+  UserFactory`. Unique columns come from `self.sequence()`, never from faker (seeding resets per
+  test, so faker repeats within one test). A factory flushes; it never commits. A child or
+  association factory **takes its parent from the caller**
+  (`WatchlistDataFactory().create(db_session, watchlist=w, stock=s)`) rather than inventing one,
+  so a test's object graph is exactly as large as the test says it is.
 
 ### Frontend — vitest
 - `vitest` + `@testing-library/react` + `msw` for network mocking.

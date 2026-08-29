@@ -16,6 +16,7 @@ Three things make this different from the stock template:
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 from logging.config import fileConfig
 from typing import Any
 
@@ -25,8 +26,8 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 # Importing the models package registers every table on `Base.metadata` so that
-# `--autogenerate` sees them. It is empty until ANV-7 — imported anyway so that adding
-# models never requires touching this file.
+# `--autogenerate` sees them. `app/models/__init__.py` re-exports all of them, so adding a
+# model never requires touching this file.
 import app.models  # noqa: F401
 from app.db.base import Base
 from app.settings import get_settings
@@ -53,24 +54,53 @@ config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
+#: Pin the migration connection's ``search_path`` to ``public``.
+#:
+#: Postgres' stock search path is ``"$user", public``, and our login role is called
+#: ``anvex`` — the same name as our schema. So ``current_schema()`` returned ``anvex`` and
+#: SQLAlchemy reported it as the connection's *default* schema. Alembic then represents the
+#: default schema as ``None`` everywhere, and only *some* of autogenerate normalises that
+#: back: tables compared correctly, but every foreign key was reported as dropped-and-added
+#: (reflected ``referred_schema=None`` vs. ``"anvex"`` in the metadata) and
+#: ``alembic_version`` itself looked like a table to drop, because the exclusion is keyed on
+#: ``version_table_schema``. Autogenerate was therefore never empty and never could be.
+#:
+#: Making ``anvex`` a non-default schema costs nothing — every migration and every model is
+#: explicitly schema-qualified already, and ``gen_random_uuid()`` lives in ``public`` — and
+#: it makes reflection fully qualified, which is the only way the comparison can be exact.
+#: This applies to alembic's connection only; the application engine is untouched.
+ENGINE_CONNECT_ARGS: dict[str, Any] = {"server_settings": {"search_path": "public"}}
 
-def include_name(name: str | None, type_: str, parent_names: dict[str, Any]) -> bool:
+
+def include_name(
+    name: str | None,
+    type_: str,
+    parent_names: dict[str, Any],
+    *,
+    default_schema: str | None = None,
+) -> bool:
     """Limit reflection to the ``anvex`` schema.
 
     ``include_schemas=True`` otherwise makes autogenerate reflect *every* schema in the
     database — ``public``, and anything an extension created — and then propose dropping
     the tables it finds there.
+
+    Alembic hands this hook the connection's **default** schema as ``None`` rather than by
+    name, so a bare ``name == SCHEMA`` silently excludes our own schema whenever ``anvex``
+    happens to *be* the default — which it was until :data:`ENGINE_CONNECT_ARGS` pinned the
+    search path (see the note there). Resolving ``None`` back to the real default before
+    comparing means the filter cannot go quietly wrong that way again.
     """
     if type_ == "schema":
-        return name == SCHEMA
+        return (default_schema if name is None else name) == SCHEMA
     return True
 
 
-def _configure(**kwargs: Any) -> None:
+def _configure(*, default_schema: str | None = None, **kwargs: Any) -> None:
     context.configure(
         target_metadata=target_metadata,
         include_schemas=True,
-        include_name=include_name,
+        include_name=partial(include_name, default_schema=default_schema),
         # Keep alembic's bookkeeping table out of `public`.
         version_table_schema=SCHEMA,
         compare_type=True,
@@ -101,7 +131,10 @@ def do_run_migrations(connection: Connection) -> None:
     # so nothing is committed and every migration silently rolls back on disconnect.
     connection.commit()
 
-    _configure(connection=connection)
+    _configure(
+        connection=connection,
+        default_schema=connection.dialect.default_schema_name,
+    )
 
     with context.begin_transaction():
         context.run_migrations()
@@ -113,6 +146,7 @@ async def run_async_migrations() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=ENGINE_CONNECT_ARGS,
     )
 
     try:

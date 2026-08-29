@@ -30,11 +30,9 @@ import pytest
 import respx
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.db.base import SCHEMA
 from app.deps.session import get_session
 from app.main import create_app
 from app.settings import Settings
@@ -56,15 +54,10 @@ DATABASE_FIXTURES = frozenset(
         "db_session",
         "db_app",
         "db_client",
-        "scratch_table",
         "throwaway_database_url",
     }
 )
 
-#: A committed table the harness creates once per session so the rollback tests have
-#: something to write to while `app/models/` is still empty. **ANV-7 deletes this** — real
-#: models and their factories replace it.
-SCRATCH_TABLE = f'"{SCHEMA}"."harness_scratch"'
 
 
 # ---------------------------------------------------------------------------------------
@@ -284,29 +277,6 @@ def db_client(db_app: FastAPI, client: AsyncClient) -> AsyncClient:
     return client
 
 
-@pytest.fixture(scope="session")
-def scratch_table(db_engine: AsyncEngine) -> Iterator[str]:
-    """A committed table the rollback tests write to, dropped at session end.
-
-    **Temporary scaffolding.** ``app/models/`` is empty until ANV-7, and the isolation proof
-    needs a table that outlives an individual test's transaction — a table created *inside*
-    the rollback would vanish with it, and the "the next test sees nothing" half of the
-    demonstration would prove nothing. ANV-7 should delete this fixture and rewrite
-    ``tests/integration/test_harness.py`` against a real model and its factory.
-    """
-    create = (
-        f"CREATE TABLE IF NOT EXISTS {SCRATCH_TABLE} ("
-        "  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),"
-        "  label text NOT NULL UNIQUE"
-        ")"
-    )
-    asyncio.run(_execute_committed(db_engine, create))
-    try:
-        yield SCRATCH_TABLE
-    finally:
-        asyncio.run(_execute_committed(db_engine, f"DROP TABLE IF EXISTS {SCRATCH_TABLE}"))
-
-
 @pytest.fixture
 def throwaway_database_url(database_available: None) -> Iterator[str]:
     """A brand-new, empty database on the test server, dropped afterwards.
@@ -320,9 +290,3 @@ def throwaway_database_url(database_available: None) -> Iterator[str]:
         yield database.database_url(name)
     finally:
         database.drop_database(name)
-
-
-async def _execute_committed(engine: AsyncEngine, statement: str) -> None:
-    """Run one statement in its own committed transaction."""
-    async with engine.begin() as connection:
-        await connection.execute(text(statement))
