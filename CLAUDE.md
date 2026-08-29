@@ -1502,6 +1502,90 @@ ANV-32's "porting is not transcription" rule, extended to code with no markup in
   re-derives. Where a mutation cannot be killed, say so at the line and say why, so the next
   reader does not delete the wrong half of a redundant pair.
 
+### Reading a wire format that lies quietly, and drawing it (ANV-34)
+
+`features/widgets/` is the dashboard widgets and the chart they are built around. It is the
+first thing in Anvex that **draws** the API's data rather than listing it, and the rules below
+are the ones that follow from that — a chart is the one surface where a misread value produces
+a *plausible picture* instead of an error, so every one of them is about closing a gap that
+does not throw.
+
+- **A per-resource `api.js` owns the conversion its wire format demands, and exports nothing
+  that skips it.** §5 already made "the projection of the response" the feature module's job;
+  ANV-34 is the case that shows why it is not optional. Prices are quoted JSON strings
+  (`"1234.5678"`, so the fourth decimal survives a `Decimal` → JSON round trip), and
+  `"10.2" < "9.5"` is `true` — so an unconverted series gives a confident, inverted price
+  domain and a chart that draws. `fetchStockSeries` therefore returns numbers and **there is
+  deliberately no exported function returning `Page.items`**: the conversion is not something a
+  future caller has to remember, because the raw shape is not reachable. The rule generalises to
+  any field whose wire type is not its usable type. The test that keeps it honest is a fixture
+  whose string ordering and numeric ordering **disagree**; a fixture of `"1"` and `"2"` passes
+  either way and proves nothing.
+- **A naive wall-clock timestamp becomes a *nominal epoch*, and it is read back with UTC
+  getters.** `stock_data.datetime` carries no zone because it is the exchange's local clock.
+  What a chart needs from it is an ordering number and a label, neither of which requires the
+  real instant — so parse the digits and rebuild them with `Date.UTC(...)`, use `scaleUtc`
+  (never `scaleTime`), and format ticks with UTC. The round trip is then exact and identical on
+  every machine. `new Date("2026-01-05T09:30:00")` is parsed as **local** time by every engine,
+  which is not wrong so much as unstable: the labels only look right because a local parse and
+  a local format cancel out, the *spacing* between two candles changes across a DST boundary in
+  the viewer's zone, and one `toISOString()` downstream shifts the whole series. Appending a `Z`
+  is the other wrong answer. **Name the number so nobody mistakes it** — `t`, `nominalEpoch`,
+  never `date` or `timestamp`. This has a test-shaped consequence: CI runs on UTC, where
+  `scaleUtc` and `scaleTime` are indistinguishable, so the test that separates them **sets
+  `process.env.TZ` itself** (Node ≥16 honours a runtime change) and asserts the label. Without
+  it that mutation survives.
+- **A pure module is only as discriminating as its fixture.** ANV-34's first mutation run
+  found a good test made vacuous by convenient data: `.nice()` on a domain of `[9.5, 10.2]` is a
+  **no-op**, so "the sparkline domain is not nice()d" passed with the guard removed. Choose
+  values on which the behaviour under test actually does something, and say in the test why
+  those values.
+- **Take d3 for the arithmetic and let React own the DOM.** `d3-scale` (value→pixel, `.ticks()`,
+  `.nice()`) and `d3-array` (`extent`) are worth their bytes: round tick selection, and the
+  choice between second/minute/hour/day intervals on a time axis, is the piece of chart maths
+  that is genuinely hard. `d3-selection` and `d3-axis` are not: they hand a second library write
+  access to a subtree React is reconciling (the old `LineChart` appended a fresh axis pair on
+  every data change and removed none), and they work through layout, which **jsdom does not
+  have** — so every test of them proves a node exists and nothing about where it is. Render the
+  SVG as JSX. `d3-shape` earns nothing for a price line: the only generator would be
+  `d3.line()` with `curveLinear`, which is one `Array.join`, and a smoothing curve on a price
+  series **draws prices that were never printed**. Declare what you import even when it arrives
+  transitively. The measured cost, for the record: `d3-scale` + `d3-array` and their five
+  transitive packages are **+34 kB raw / +12.3 kB gzip**.
+- **A widget survives every size by picking a *mode*, not by declaring a minimum.** ANV-33 fixed
+  2×2 cells — 40×40 px — as the floor, and a window manager whose windows have a minimum the
+  user cannot reach is broken. So the size→mode decision is a **pure function of two numbers**
+  (`chartLayout`) with the thresholds as named constants, not a `width > 220` inside a
+  component: axes, bare sparkline, a single number, or nothing at all when nothing has been
+  measured. `unmeasured` is an ordinary state, not an error — it is what a hidden element
+  reports and what jsdom reports for everything. A palette advertising a `minWidth` larger than
+  the widget's real floor is hiding the constraint rather than meeting it, so the palette says
+  `2` and a test renders every entry with **no props at all**.
+- **Where the API is keyed on an entity and a destination, the affordance is a pair of buttons,
+  not a drag.** `PATCH /v1/watchlists/{id}/stocks/{stock_id}` with `{position}` *is* "Move NVDA
+  up". Drag is a way of expressing a destination that needs a box model to interpret; a button
+  expresses the same destination with none, is keyboard- and touch-operable by construction, and
+  is testable — a drag library measures its droppable, and jsdom reports 0×0 (ANV-33 flagged the
+  window palette as mouse-only for the same reason; do not reproduce it). A move that changes
+  nothing visible under the pointer needs a `role="status"` announcement. Adding drag later is
+  additive and must stay additive.
+- **Render the server's answer; never splice your own copy.** The reorder endpoint returns the
+  whole reordered list precisely so a client need not guess, and the client's belief about where
+  a row currently sits is stale by construction — that was ANV-15's defect, and the new API has
+  no field for it. **The test that proves this makes the server return an order no local splice
+  could produce**; asserting the "expected" order passes for an optimistic implementation too.
+- **A live region and an in-flight guard are the same two rules a form has** (ANV-29), and they
+  apply to any widget that writes: the guard is an early return *and* a `disabled` attribute,
+  and the message slots are rendered unconditionally and left empty. The early return is
+  **unkillable by mutation under jsdom** — Testing Library awaits the render that applies
+  `disabled`, so a second press can never reach the handler — which makes it exactly ANV-33's
+  "record it at the line" case rather than a line to delete.
+- **A chart needs a sentence.** An `<svg>` of `<path>`s is an empty element to a screen reader,
+  so the text alternative is a pure function of the series (`describeSeries`) carrying the
+  numbers, asserted without rendering. Quote the timestamps **as the API sent them**: it is the
+  one place a user reads them back, and re-deriving them is one more chance to attach a zone
+  that was never there.
+
 ### Frontend test harness (ANV-23)
 
 The mirror of §6's backend rules: **extend the one setup file and the one MSW server; never start a
