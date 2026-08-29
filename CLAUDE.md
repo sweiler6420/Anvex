@@ -373,6 +373,33 @@ authorization is not data access.
   `{items, total, limit, offset, has_more}`, offset paging, `limit` bounded by `MAX_PAGE_LIMIT`.
   `total` counts every matching row, `has_more` is computed, and the two bounds are echoed so the
   response is self-describing. A bare array cannot gain a key later without breaking clients.
+- **The `Page[T]` envelope is built in the service, and the limit is resolved there.** A repo
+  returns `(rows, total)` and cannot import `app.schemas`, which is why `limit` is a *required*
+  keyword on every paginated repo method — so the service resolves the caller's limit with
+  `app.schemas.pagination.resolve_page_limit` (`None` → `DEFAULT_PAGE_LIMIT`, out of range → clamped
+  into `1..MAX_PAGE_LIMIT`), passes that one number to the repo, projects the rows onto the `XOut`
+  schema and echoes the same number back in the envelope. Two layers guard the ceiling and they are
+  not redundant: the route's `Query(ge=1, le=MAX_PAGE_LIMIT)` **rejects** an over-large limit with a
+  422, so an HTTP client is never quietly handed a shorter page than it asked for, while the
+  service's clamp is what protects every caller that has no request to reject — a Celery task, a
+  seed script — from asking Postgres for the whole table and then failing `Page.limit`'s own `le`
+  bound with a 500. `total` is counted *before* the window, so an offset past the end is an empty
+  page with a truthful total, never an implied end of the collection.
+- **Normalising an identifier is the service's job, not the request schema's.** An annotated type's
+  `BeforeValidator` (ANV-8's `Ticker`) does apply to a **path** parameter as well as a body — that
+  was verified, not assumed — but it only ever covers callers that arrive over HTTP. A rule that a
+  Celery task or a seed loader must also obey belongs in the one layer they all go through, so the
+  route passes the raw path segment down and the service canonicalises it. The corresponding repo
+  lookup stays exact and case-sensitive: folding case in the query would defeat the unique index it
+  is served by. Two tests keep this honest — the OpenAPI document is asserted to declare a plain
+  unconstrained string (nothing is happening at the edge) and the lower-cased URL is asserted to
+  resolve anyway (so it can only be the service).
+- **The literal-before-parameterised rule bites within *one* path segment.** `/{x}` compiles to a
+  single-segment pattern — Starlette's default converter never matches a `/` — so a two-segment
+  literal like `/stocks/by-ticker/{ticker}` cannot be shadowed by `/stocks/{stock_id}` whichever
+  order they are declared in, while a one-segment literal like `/users/me` absolutely can. Declare
+  the literal first regardless, and if a test claims the ordering is load-bearing, make it prove
+  that against a control app with the declarations reversed rather than asserting a comment.
 - **Schemas agree with columns by construction.** A validator's length cap is *imported* from the
   model module's constant, never retyped, so widening a `VARCHAR` cannot leave a stale number in a
   schema — and an oversized field is a 422 at the edge rather than a `StringDataRightTruncation`.

@@ -45,6 +45,28 @@ DEFAULT_PAGE_LIMIT = 50
 MAX_PAGE_LIMIT = 200
 
 
+def resolve_page_limit(limit: int | None) -> int:
+    """The window size to actually query for a caller that asked for ``limit``.
+
+    ``None`` — "I did not say" — becomes :data:`DEFAULT_PAGE_LIMIT`, and anything outside
+    ``1..MAX_PAGE_LIMIT`` is clamped into it. It lives here, beside the bounds it enforces,
+    so a service cannot resolve a limit that the :class:`Page` it is about to build would
+    then reject: ``Page.limit`` carries ``ge=1, le=MAX_PAGE_LIMIT``, so an unclamped 10,000
+    is a pydantic error at construction time — a 500 for a caller who merely asked for too
+    much.
+
+    **This is a backstop, not the API's answer.** An HTTP caller asking for more than the
+    ceiling is refused at the edge with a 422 (the ``Query`` bounds on the route), so it is
+    never quietly handed a shorter page than it requested and told nothing. The clamp
+    exists for every *other* caller of a service — a Celery task, a seed script, a future
+    internal API — where there is no request to reject and the alternative is asking
+    Postgres for the whole table.
+    """
+    if limit is None:
+        return DEFAULT_PAGE_LIMIT
+    return max(1, min(limit, MAX_PAGE_LIMIT))
+
+
 class Page[T](BaseModel):
     """One window onto a larger collection.
 
@@ -82,4 +104,4 @@ class Page[T](BaseModel):
         return self.offset + len(self.items) < self.total
 
 
-__all__ = ["DEFAULT_PAGE_LIMIT", "MAX_PAGE_LIMIT", "Page"]
+__all__ = ["DEFAULT_PAGE_LIMIT", "MAX_PAGE_LIMIT", "Page", "resolve_page_limit"]

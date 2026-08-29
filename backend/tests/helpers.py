@@ -8,9 +8,14 @@ depends on it fails loudly rather than drifting.
 Also home to the fakes that let a layer be tested without the layer below it:
 :class:`StubSession`, because "override ``get_session`` with something that does not touch
 Postgres" is what a ``tests/api/`` test does whenever the route it is contract-testing
-happens to take a session; and :class:`FakeUserRepo` plus :func:`make_user`, because a
-service's own logic is worth testing at unit speed against an in-memory repo rather than
-only through a database.
+happens to take a session; and the ``FakeXRepo`` / ``make_x`` pairs
+(:class:`FakeUserRepo`, :class:`FakeStockRepo`), because a service's own logic is worth
+testing at unit speed against an in-memory repo rather than only through a database.
+
+**The fakes live here, together.** Each new resource adds its pair beside the existing ones
+rather than starting a module-local set, so an API test can build one object graph shared
+across two services — which is what made register → login → ``/me`` testable with no
+database at all.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ from fastapi import FastAPI
 from httpx import Response
 
 from app.deps.session import get_session
-from app.models import User
+from app.models import Stock, User
 
 #: Every key ``app.schemas.errors.ErrorResponse`` promises, always present.
 ERROR_BODY_KEYS = frozenset({"code", "message", "details", "request_id"})
@@ -210,6 +215,96 @@ class FakeUserRepo:
         return next((user for user in self.users if predicate(user)), None)
 
 
+class FakeStockRepo:
+    """An in-memory stand-in for :class:`app.repos.stock.StockRepo`.
+
+    Same idea as :class:`FakeUserRepo`, and the same discipline: it re-implements the
+    *behaviour* of the real queries rather than pretending to be them, so a service test
+    driven against it is genuinely testing the service.
+
+    Two behaviours are load-bearing and deliberately faithful:
+
+    * :meth:`get_by_ticker` is **exact and case-sensitive**, because the real one is
+      (``ticker_symbol`` is unique and its index serves the lookup directly). A fake that
+      folded case would silently pass a service that had forgotten to normalise, which is
+      one of the things ``tests/unit/test_services_stock.py`` exists to catch.
+    * :meth:`list_stocks` counts ``total`` **before** applying the window, exactly as
+      ``BaseRepo._page`` does, so an ``offset`` past the end is ``([], total)`` and not
+      ``([], 0)``.
+
+    What it does not reproduce is SQL: ``ilike`` escaping of ``%``/``_``, and the stability
+    of the ticker ordering, are database facts proved in
+    ``tests/integration/test_repos_stock.py``. ``calls`` records ``(method, argument)`` in
+    order, so a test can assert *what the service asked the repo for* — which is how ticker
+    normalisation gets pinned at the boundary rather than only at the result.
+    """
+
+    def __init__(self, *stocks: Stock) -> None:
+        self.stocks: list[Stock] = list(stocks)
+        self.calls: list[tuple[str, Any]] = []
+
+    def add(self, stock: Stock) -> Stock:
+        self.stocks.append(stock)
+        return stock
+
+    async def get_by_id(self, session: Any, stock_id: uuid.UUID) -> Stock | None:
+        self.calls.append(("get_by_id", stock_id))
+        return next((stock for stock in self.stocks if stock.stock_id == stock_id), None)
+
+    async def get_by_ticker(self, session: Any, ticker_symbol: str) -> Stock | None:
+        """Exact match, casing included — see the class docstring."""
+        self.calls.append(("get_by_ticker", ticker_symbol))
+        return next(
+            (stock for stock in self.stocks if stock.ticker_symbol == ticker_symbol), None
+        )
+
+    async def list_stocks(
+        self,
+        session: Any,
+        *,
+        search: str | None = None,
+        limit: int,
+        offset: int = 0,
+    ) -> tuple[list[Stock], int]:
+        self.calls.append(
+            ("list_stocks", {"search": search, "limit": limit, "offset": offset})
+        )
+        term = (search or "").strip().lower()
+        matched = [
+            stock
+            for stock in self.stocks
+            if not term
+            or term in stock.ticker_symbol.lower()
+            or term in stock.company.lower()
+        ]
+        matched.sort(key=lambda stock: stock.ticker_symbol)
+        # `total` counts every match and is taken *before* the window is applied.
+        return matched[offset : offset + limit], len(matched)
+
+
+def make_stock(
+    *,
+    ticker_symbol: str = "AAPL",
+    company: str = "Apple Inc.",
+    market: str = "NASDAQ",
+    isin: str | None = "US0378331005",
+    stock_id: uuid.UUID | None = None,
+) -> Stock:
+    """Build a detached :class:`~app.models.Stock` for :class:`FakeStockRepo`.
+
+    Not :class:`tests.factories.StockFactory`, which flushes to a session — the whole point
+    of these tests is that there is no session. ``stock_id`` is a server default in
+    production, so it is filled in here.
+    """
+    return Stock(
+        stock_id=stock_id or uuid.uuid4(),
+        ticker_symbol=ticker_symbol,
+        company=company,
+        market=market,
+        isin=isin,
+    )
+
+
 def make_user(
     *,
     username: str = "testuser",
@@ -234,9 +329,11 @@ def make_user(
 
 __all__ = [
     "ERROR_BODY_KEYS",
+    "FakeStockRepo",
     "FakeUserRepo",
     "StubSession",
     "assert_error_envelope",
+    "make_stock",
     "make_user",
     "override_session",
 ]

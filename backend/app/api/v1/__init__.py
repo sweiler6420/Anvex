@@ -13,7 +13,7 @@ with the resource module owning its own ``prefix="/auth"`` and ``tags``.
 
 from fastapi import APIRouter
 
-from app.api.v1 import auth, users
+from app.api.v1 import auth, stocks, users
 
 router = APIRouter(prefix="/v1")
 
@@ -21,5 +21,6 @@ router = APIRouter(prefix="/v1")
 # generated docs. Each module owns its own `prefix` and `tags`.
 router.include_router(auth.router)
 router.include_router(users.router)
+router.include_router(stocks.router)
 
 __all__ = ["router"]
