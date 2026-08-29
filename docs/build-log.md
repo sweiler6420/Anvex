@@ -61,8 +61,9 @@ modified. What each contributes to Anvex:
 | ANV-9 | Repositories | **Done** — *E2 Data layer complete* |
 | ANV-10 | Security utilities and pure token domain | **Done** |
 | ANV-11 | Auth service, dependencies and routes | **Done** |
-| ANV-42 | Drop passlib, hash with bcrypt directly | Next *(inserted — Stephen's call)* |
-| ANV-12 … ANV-41 | see `backlog.md` | Not started |
+| ANV-42 | Drop passlib, hash with bcrypt directly | **Done** *(inserted — Stephen's call)* |
+| ANV-12 | Users service and routes | Next |
+| ANV-13 … ANV-41 | see `backlog.md` | Not started |
 
 ### ANV-1 — Done
 Commits `0ccc0df`, `9ae4224` on `main`.
@@ -560,3 +561,31 @@ the container booted to `ImportError: email-validator is not installed`. The age
 before concluding the environment is offline. All base images (`python:3.12-slim-bookworm`,
 `ghcr.io/astral-sh/uv`, `postgres:16-alpine`, `redis:7-alpine`, **`node:22-alpine`**) are already
 cached locally, so builds mostly need PyPI/npm rather than Docker Hub.
+
+### ANV-42 — Done *(inserted mid-epic; Stephen's call)*
+Commit `7122ea6`. **Verified independently:** `454 passed / 192 skipped`, ruff clean, `passlib`
+absent from both `uv.lock` and the synced venv, `bcrypt` resolved to **5.0.0**, and a real round
+trip producing a `$2b$12$` hash that verifies (wrong password and garbage hash both `False`).
+
+`app/utils/security.py` now imports `bcrypt` and nothing else non-stdlib. Same six public names,
+same signatures — `AuthService` and the API tests needed no edit. `exceeds_bcrypt_limit` runs
+**first** in `hash_password`, so an over-long password raises `PasswordTooLongError` before bcrypt
+5.x can raise its own `ValueError`.
+
+**Cost factor is `BCRYPT_COST_FACTOR = 12`, stated explicitly** rather than taking
+`bcrypt.gensalt()`'s default — 12 is what passlib used, so latency and security margin are identical
+across the swap, making this a pure dependency change rather than a silent security one. Naming it
+also means an upstream default change cannot move our work factor in either direction.
+
+`tests/unit/test_security.py` passed **unchanged** apart from the one permitted line
+(`{"passlib"}` → `{"bcrypt"}`) plus an appended `TestLegacyPasslibHash`. All 12 broken-stored-hash
+cases still return `False` against bcrypt 5 — including `$2b$99$…` and whitespace, which raise
+`ValueError("Invalid salt")` that the existing `except` already covers.
+
+**Process note — the orchestrator supplied a fabricated hash.** The ticket prompt included a
+"legacy passlib hash" for `correct horse battery staple` that was invented, not generated. The agent
+caught it: re-hashing against that digest's own salt did not reproduce it, and passlib 1.7.4 +
+bcrypt 4.0.1 installed in a throwaway `uv run --no-project` environment rejected it too. It then
+generated a genuine hash from that exact removed stack and used that instead, recording how in a
+comment. **Lesson: never hand an agent a synthetic fixture presented as real output** — write the
+instruction to generate it, or generate it first and paste verified output.
