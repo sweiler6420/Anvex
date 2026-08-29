@@ -13,7 +13,7 @@
 #   docker compose up -d db redis minio minio-init api   # the working dev stack
 #   docker compose up -d db-test                         # backend test database (ANV-6)
 #   docker compose --profile celery up -d worker beat    # Celery worker + scheduler (ANV-21)
-#   docker compose --profile frontend up -d              # web placeholder (ANV-23)
+#   docker compose --profile frontend up -d web          # Vite dev server on :5173 (ANV-23)
 #   docker compose down -v                               # stop and drop volumes
 
 name: anvex
@@ -257,27 +257,41 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # ------------------------------------------------------------ Frontend placeholder (ANV-23)
+  # ----------------------------------------------------------------- Frontend (ANV-23)
   #
-  # ANV-23 creates frontend/package.json, frontend/Dockerfile and the real dev server.
-  # Until then this is a defined-but-not-started stub behind the `frontend` profile: it
-  # pins the Node version and the port the API's CORS origins already allow, and nothing
-  # else. ANV-23 swaps `image:` for its own `build:` block.
+  # The Vite dev server. **Node is not installed on the dev host**, so this container is
+  # not a convenience — it is where every npm / vite / vitest command runs. See
+  # frontend/README.md for the one-liners.
+  #
+  # It stays behind the `frontend` profile so the day-to-day backend stack is unaffected:
+  #   docker compose --profile frontend up -d web
+  #
+  # `frontend/Dockerfile` installs node_modules at **/node_modules**, one level above the
+  # bind mount below — the same argument that puts the backend's venv at /opt/venv. So
+  # there is no node_modules volume here, and a dependency change is `up -d --build`
+  # rather than a stale volume nobody remembers to remove.
   web:
     profiles: ["frontend"]
-    image: node:22-alpine
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: dev
+    image: anvex/web:dev
     env_file: .env
-    working_dir: /app
+    environment:
+      # VITE_* reaches the browser bundle from this file via `env_file`; vite.config.js
+      # also points `envDir` at the repo root, which is what covers a run outside compose.
+      #
+      # The dev proxy target is server-side only, hence no VITE_ prefix: it forwards /v1
+      # and /health to the API over the compose network, by service name (CLAUDE.md §4).
+      WEB_DEV_PROXY_TARGET: http://api:8000
     ports:
       - "${WEB_HOST_PORT:-5173}:5173"
     volumes:
+      # Dev hot-reload. /node_modules lives outside this mount, and Vite's own cache goes
+      # to /tmp (`cacheDir` in vite.config.js), so nothing is written back to the host tree.
       - ./frontend:/app
-    command:
-      - sh
-      - -c
-      - >
-        echo "web placeholder: ANV-23 replaces this with the Vite dev server on :5173";
-        exec sleep infinity
+    # Healthcheck is inherited from the image: GET / on :5173.
     depends_on:
       api:
         condition: service_started

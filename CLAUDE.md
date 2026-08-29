@@ -835,7 +835,8 @@ frontend/src/
 ├── lib/          # api client, axios instances + interceptors, router config, env config
 ├── hooks/        # cross-feature hooks only
 ├── providers/    # React context providers (auth, theme, errors)
-└── styles/
+├── styles/
+└── test/         # setup.js (the one setupFiles entry) + msw/{handlers,server}.js
 ```
 
 - **Routes are thin.** A route file declares the route, its `beforeLoad` auth guard, and renders a
@@ -847,6 +848,78 @@ frontend/src/
   `hooks/` only on the second real consumer.
 - Tailwind config, brand palette (`brand`=cyan, `neutral`=slate), `RTFont`/Poppins fonts, and
   class-based dark mode are carried over from the previous web app and must keep working.
+
+### How the layer runs (ANV-23)
+
+**`frontend/README.md` is the operating manual; this is the contract.**
+
+- **Node is not installed on the dev host, by choice, and that is not a temporary state.**
+  Every `npm` / `vite` / `vitest` / `eslint` invocation runs in a container built from
+  `frontend/Dockerfile` — either `docker compose exec web npm run <script>` against the running
+  `web` service, or a one-shot `docker run … anvex/web:dev npm run <script>`. **A one-shot mounts
+  the *repo root*, not `frontend/`**, because `envDir` reaches one level up for the `.env`.
+- **`node_modules` lives at `/node_modules`, above the `/app` bind mount.** This is §4's image-layout
+  rule applied to Node: compose mounts `./frontend` over `/app`, so anything installed inside `/app`
+  is hidden, exactly as a venv at `/app/.venv` would be. Node resolves by walking *up* from the
+  importing file and `npm run` puts every ancestor `node_modules/.bin` on `PATH`, so `/node_modules`
+  is the one location that works from both `/app/src/**` and `/repo/frontend/src/**`. **No
+  `node_modules` volume**, deliberately: the image layer is authoritative, a dependency change is
+  `up -d --build`, and a stale anonymous volume can never silently outrank the lockfile. Vite's
+  `cacheDir` is `/tmp/anvex-vite` for the same reason `beat` writes its schedule to `/tmp` — nothing
+  a container generates belongs in the bind-mounted source tree.
+- **Never set `NODE_ENV` in a frontend image or environment.** Vite honours an inherited `NODE_ENV`
+  over its own mode, so `NODE_ENV=development` — which is the *obviously correct* thing to put in a
+  dev stage — makes `npm run build` bundle `react-dom.development` and emit a development build with
+  no warning at all (330 kB vs 145 kB). Vite sets it itself, per command. The Dockerfile carries a
+  comment where the `ENV` line would go.
+- **Config comes from the root `.env` and nowhere else.** `vite.config.js` sets `envDir` to the repo
+  root (§2), and only `VITE_`-prefixed keys reach the browser. Under compose the same values also
+  arrive as process env via `env_file`, which Vite prefers — both paths lead to one file. **There is
+  no `frontend/.env`, and the old app's `src/app-config.json` is not ported.** `src/lib/env.js` is
+  the only module that touches `import.meta.env`; everything else imports `API_BASE_URL` / `apiUrl`
+  from it. A config value the *browser* must not see (the dev proxy target) carries no `VITE_`
+  prefix and is read at config time via `loadEnv(mode, root, '')`.
+- **Two ways to reach the API, both supported.** `VITE_API_BASE_URL` set → cross-origin, allowed by
+  `API_CORS_ORIGINS`. `VITE_API_BASE_URL` empty → same-origin: `apiUrl()` yields relative URLs and
+  the dev-server proxy forwards `/v1` and `/health` to `WEB_DEV_PROXY_TARGET` (the `api` service by
+  name inside compose). Empty is a meaningful value, not a missing one.
+
+### Tailwind is **v3**, and that was a decision (ANV-23)
+
+The config is carried over token-for-token from `AverageInvestorWeb/tailwind.config.js`. The old
+repo declared `tailwindcss ^4` but **never made it work** — no `postcss.config.js`, no
+`@tailwindcss/postcss`, and v3 `@tailwind` directives in its CSS — so there was no v4 setup to
+preserve, only a v3-shaped config file. v4 additionally moves configuration into CSS (`fontWeight`
+is not even a theme namespace there) and changes defaults the ported components were authored
+against: border colour → `currentColor`, ring → 1px `currentColor`, `shadow-sm` renamed,
+`outline-none` → `outline-hidden`. Adopting it alongside the scaffold would restyle all ~40
+components ANV-28..36 port, invisibly. **v4 is its own ticket, after the ports land.**
+`src/styles/tailwind.test.js` runs the real PostCSS pipeline and asserts on the *generated CSS* —
+a design token that stops being emitted fails the suite rather than showing up as an unstyled screen.
+
+### Frontend test harness (ANV-23)
+
+The mirror of §6's backend rules: **extend the one setup file and the one MSW server; never start a
+second.**
+
+- `src/test/setup.js` — the only `setupFiles` entry. Installs `@testing-library/jest-dom`, starts
+  the server, and runs `cleanup()` + `resetHandlers()` after **every** test.
+- `src/test/msw/server.js` — the only `setupServer(...)` call in the repo. A second one means two
+  interceptors fighting over `fetch`.
+- `src/test/msw/handlers.js` — the defaults, plus `errorResponse()` and `pageResponse()`. **Build a
+  mock through those two**, so a handler cannot invent a body the backend would never send: the
+  error envelope is fixed (`{error: {code, message, details, request_id}}`, `details` `{}` and never
+  `null`) and a list is always `Page<T>`. Handlers are keyed on `apiUrl(path)`, so they follow
+  `VITE_API_BASE_URL` and cover both the cross-origin and same-origin configurations.
+- One test's worth of behaviour is `server.use(...)`, never an edit to the defaults.
+- **`onUnhandledRequest: 'error'`.** The default (`'warn'`) lets an unmocked call reach the real
+  network, where it hangs or — worse — hits an API the developer happens to be running, and the test
+  passes for the wrong reason.
+- **`fetch`/`axios` are never stubbed.** Mocking at the network boundary is what keeps the API client
+  itself (interceptors, refresh, error mapping) under test rather than mocked away.
+- vitest stubs `.css` imports (`?raw` included) unless `test.css` is on, and `import.meta.url` is an
+  `http:` URL inside vitest — a test that needs a file's text reads it from disk relative to
+  `process.cwd()`.
 
 ---
 

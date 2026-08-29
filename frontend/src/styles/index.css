@@ -1,0 +1,117 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Carried over from AverageInvestorWeb/src/index.css (ANV-23), with two corrections.
+ *
+ * 1. The font URLs said `/public/fonts/...`. `public/` is the *served root* — in CRA and in
+ *    Vite alike — so every one of those ten requests 404'd and RTFont never loaded in the
+ *    old app; `font-gothic` silently fell through to Poppins. They are `/fonts/...` here,
+ *    and `src/styles/fonts.test.js` asserts the declaration set stays that way.
+ * 2. `--primary` is defined. The neon box shadows in tailwind.config.js interpolate it and
+ *    nothing in the old repo ever set it, so `shadow-neon-primary` rendered as a bare white
+ *    ring. It is cyan-500, i.e. `brand-500`.
+ */
+
+:root {
+  --primary: #06b6d4; /* brand-500 / cyan-500 */
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 80px;
+}
+
+body {
+  scroll-behavior: smooth;
+}
+
+@font-face {
+  font-family: 'RTFont';
+  src: url('/fonts/AllRoundGothic-Bold.ttf') format('truetype');
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'RTFont';
+  src: url('/fonts/AllRoundGothic-Bold-Oblique.ttf') format('truetype');
+  font-weight: 800;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'RTFont';
+  src: url('/fonts/AllRoundGothic-Book.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'RTFont';
+  src: url('/fonts/AllRoundGothic-Book-Oblique.ttf') format('truetype');
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'RTFont';
+  src: url('/fonts/AllRoundGothic-Demi.ttf') format('truetype');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'RTFont';
+  src: url('/fonts/AllRoundGothic-Demi-Oblique.ttf') format('truetype');
+  font-weight: 600;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'RTFont';
+  src: url('/fonts/AllRoundGothic-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'RTFont';
+  src: url('/fonts/AllRoundGothic-Medium-Oblique.ttf') format('truetype');
+  font-weight: 500;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'RTFont';
+  src: url('/fonts/AllRoundGothic-XLig.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'RTFont';
+  src: url('/fonts/AllRoundGothic-XLig-Oblique.ttf') format('truetype');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+@layer base {
+  html {
+    @apply bg-neutral-50 text-neutral-900;
+  }
+  .dark {
+    @apply bg-neutral-950 text-neutral-300;
+  }
+}
