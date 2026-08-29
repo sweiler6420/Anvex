@@ -1596,3 +1596,79 @@ because each changes appearance.
 12 mutations, 12 caught. It also declared one test that discriminates weakly rather than dropping
 it: *"the contact form still refuses to submit"* has no realistic mutation today because nothing
 submits — a guard against a future wiring-up, and said so.
+
+### ANV-33 — Done
+Commit `91d92f5`, 26 files, **232 new tests** (393 → **625**). **Verified independently:** 625 pass,
+lint clean, and the geometry tier runs **138 tests with no DOM at all**. I confirmed three of its
+findings directly against the old repo.
+
+**What the system actually is** (its reading, not the ticket's): a **constraint-solving tiling window
+manager on an integer grid**. Everything is whole cells; pixels appear in exactly three places. The
+invariant the whole 1,200 lines exists to maintain is *no two windows overlap and none escapes the
+grid* — every gesture proposes a rectangle and asks the geometry whether it is legal before
+committing. The best part is `computeArrangementMinimums`, which exploits the no-overlap invariant:
+windows sharing a horizontal band must be side by side, so that band needs the **sum** of their
+minimum widths. That floor is why **the grid grows and the desktop scrolls rather than crushing the
+windows**.
+
+**The ticket's premise about which modules are pure was two-thirds right.** `skyline.js` was clean;
+`GridManager.js` was **not** — 15 of its 49 lines were a DOM subscription. And **the single most
+important pure function in the system was not in a module at all**: the ~20 lines deciding the grid
+were inline in a `useEffect`, and collapse, grow, move, resize, close and restore were anonymous
+`onClick` callbacks in the JSX (the maximise one is 35 lines of collision-checked geometry in the
+middle of a render). Extracting those is where most of the test value came from — they were
+previously unreachable without a browser. It also found the collision predicate written **twice**,
+which is how "the reflow says it fits and the drag says it does not" becomes possible.
+
+**Bugs found in the original and fixed:**
+- **`win_${Date.now()}`** — two windows dropped in the same millisecond get the **same id**: one
+  React key for two elements, and closing one closes both. *Confirmed at line 463.*
+- `createResizeObserver` returned the raw observer, so `disconnect()` left a **scheduled
+  `requestAnimationFrame` holding a `setState` for a component about to unmount**. React 18 does not
+  warn, so it was silent.
+- Its "debounce" was leading-edge-plus-next-frame, so the `debounceMs = 60` the layout passed **did
+  nothing**.
+- The grid `useEffect` listed the container size and the *aggregate* minimum footprint but **not
+  `windows`**, which it read — so rearranging windows without changing the sum of their minimum
+  widths left the grid at its old size.
+- `spiralSearch`'s fallback returned the requested position **clamped but unchecked** — a colliding
+  position with no way for the caller to know.
+- `NaN` propagation: every comparison against `NaN` is false, so an out-of-grid rectangle read as
+  in-bounds and a `NaN` position could be committed to a window that then cannot be found.
+- Four control dots were `<button>`s with **no accessible name** and **no `type`** (would submit any
+  enclosing form).
+
+**Dead code confirmed and not ported:** `WindowManager.js` exported **four** reflow strategies; the
+app reached **one**. Also `computeGridSpecWithMinimumFootprint`, whose body **could not have
+worked** — *verified in `GridManager.js:21-22`*: `const cols = fitsW ? requiredCols : requiredCols`,
+and the same for rows. Both branches identical, so the "does it fit" computation feeds two ternaries
+that discard it. And `reflowWindows` reads **backwards from its own name** — *confirmed:*
+`if (strategy !== 'aggressive')` means `'aggressive'` **skips** the scaling pass `'conservative'`
+performs.
+
+**Four defects found and deliberately NOT fixed**, each pinned by a test named `DEFECT` with the
+correct behaviour written beside it — because fixing them changes where windows land. The worst:
+**reflow can shrink a window below its own `minWidth`, and in the extreme to zero width** — a window
+that renders as nothing, has no header to grab, and cannot be recovered.
+
+**The jsdom stub is deliberately inert and never fires.** A stub reporting a fabricated
+`contentRect` would make every downstream test pass while proving the number the stub invented —
+jsdom has no box model, so nothing in the suite could contradict it. When a test must fabricate a
+size it does so through a **named prop**, so the invented number sits beside the assertion rather
+than in a fixture two screens away where the next reader mistakes it for a measurement.
+
+**It labelled its own tests by what they prove:** 137 prove real behaviour with no DOM (including
+three seeded property tests — the packer never overlaps over 300 random inputs; reflow is the
+identity on any feasible arrangement over 200), 43 prove real behaviour in a DOM without
+measurement, and **52 prove wiring only, and say so in the file header**.
+
+**46 mutations. First pass killed 39.** Of the 7 survivors: 4 were real gaps (two needed an obstacle
+in a specific corner before growth order mattered); **1 was its own worthless test** — the
+pending-frame leak has *no observable symptom* because React 18 removed the warning and a `setState`
+on an unmounted component is a no-op, so it rewrote the test to assert the cancellation itself; and
+**3 were confirmed equivalent mutants**, documented at the line rather than papered over.
+
+**One user-visible copy change, offered for veto:** the four control tooltips became
+"Collapse to minimum size" / "Grow to fill free space" / "Fill the desktop" / "Close window", on the
+grounds that Minimize/Maximize describe desktop operations this component does not perform (nothing
+minimises to a taskbar; there is no restore). One-line revert in `CONTROLS`.

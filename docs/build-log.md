@@ -89,12 +89,13 @@ modified. What each contributes to Anvex:
 | ANV-30 | Sign-up page | **Done** |
 | ANV-31 | Recovery and Unauthorized pages | **Done** |
 | ANV-32 | Home marketing page | **Done** |
-| ANV-33 | Bin-packing window system | Next |
-| ANV-34 … ANV-41 | see `backlog.md` | Not started |
+| ANV-33 | Bin-packing window system | **Done** |
+| ANV-34 | Dashboard widgets | Next |
+| ANV-35 … ANV-41 | see `backlog.md` | Not started |
 | ANV-43 | Backend password strength policy | Backlog — *found by ANV-30, high priority* |
 
-**3,204 tests total** — **2,811 backend** (2,497 with Docker stopped, DB/S3/broker tiers skipping)
-and **393 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check`
+**3,436 tests total** — **2,811 backend** (2,497 with Docker stopped, DB/S3/broker tiers skipping)
+and **625 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check`
 and `eslint` all clean. Container tiers genuinely execute: **276 DB**, **29 S3**, **9 broker**.
 
 **Cosmetic issues in the ported marketing copy, flagged and deliberately NOT changed** (they are
@@ -351,18 +352,29 @@ such rule was ever written**. The four client-side rules are therefore not a mir
   an open decision, not an oversight.
 
 
-**For ANV-33 (bin-packing window system):**
-- **The only integration point is `Workflow`'s `demo` prop.** `HomePage.jsx` is where ANV-35 passes
-  `<InteractiveDesktop />`; nothing in `features/home/` imports the window system, so **ANV-33 needs
-  no edit to the marketing page at all.**
-- The panel it must fit: `data-testid="workflow-demo-panel"`, `relative overflow-hidden rounded-lg
-  p-4`, **`h-96` below `lg` and `h-full` at `lg`** — so the layout must survive both a fixed 24rem
-  height and a stretched flex height, and must not overflow the rounded panel.
-- `HomePage.test.jsx`'s two seam tests are the contract — keep them green.
-- **jsdom has no `ResizeObserver` and no layout — every measurement is 0.** If `BinPackingLayout`
-  measures its container, ANV-33 owns that stub. `src/test/setup.js` already holds `scrollTo` and
-  `scrollIntoView`; **add beside them, do not start a second setup file.**
-- `Workflow` renders without a router, which is what lets ANV-33 test the window system without
-  mounting the app.
-- Icons live in `@components/ui/icons` (eleven hand-rolled MIT Heroicons paths) — not inline, not
-  from a package.
+**For ANV-34 (widgets) and ANV-35 (InteractiveDesktop):**
+- **A window's content is a React node on the window object** — `content: <CounterWidget />`.
+  Nothing in `features/desktop/` inspects it or knows a widget exists. **A palette of widgets needs
+  no change to that feature at all.**
+- **`onWindowsChange` is always called with an *updater function*** — the prop must be a React state
+  setter (`onWindowsChange={setWindows}`). This was the original's undocumented contract; passing a
+  plain `(next) => …` **silently loses every drag**. There is now a test asserting it.
+- **Do not pass an inline array literal as `windows`** — a new identity every render re-syncs the
+  internal copy every render. Hold it in `useState`.
+- Window shape: `{id, title, color, x, y, width, height, minWidth, minHeight, content}`, all
+  geometry in **cells**. The content box is `overflow: auto`, sized `calc(100% - 40px)`; **a widget
+  must survive being 2×2 cells** (40×40 px at the default `cellSize`).
+- `resetWindowIdCounter()` exists for tests that want to name the ids a drop produces.
+- **ANV-35 needs no edit to `Workflow.jsx`** — its whole change is
+  `<Workflow demo={<InteractiveDesktop />} />` in `HomePage.jsx`. The old `InteractiveDesktop`
+  (110 lines) is a straight port with `cellSize={20} minGridWidth={4} minGridHeight={3}`; in the
+  `h-96` panel that is a 4-cell menu strip and roughly a 38×14 grid — **check it does not overflow
+  the rounded panel.**
+- **jsdom has no layout.** The `ResizeObserver` stub in `src/test/setup.js` is deliberately **inert
+  and never fires** — a stub reporting a fabricated `contentRect` would make every downstream test
+  pass while proving the number the stub invented. When a test must fabricate a size, pass it
+  through `BinPackingLayout`'s `useContainerSize` prop so the invented number **sits beside the
+  assertion**.
+- **Known gap, not fixed:** the `WindowMenu` palette is `draggable` `<li>`s, so it is **mouse-only**
+  — there is no keyboard equivalent of an HTML5 drag, in the original or the port. The honest fix is
+  a click-to-add affordance, which is a behaviour change and belongs to ANV-34/35.
