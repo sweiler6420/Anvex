@@ -77,12 +77,13 @@ modified. What each contributes to Anvex:
 | ANV-18 | AlphaVantage client | **Done** |
 | ANV-19 | NewsAPI client, service and routes | **Done** |
 | ANV-20 | S3 client and storage service | **Done** |
-| ANV-21 | Celery application and worker wiring | Next |
-| ANV-22 … ANV-41 | see `backlog.md` | Not started |
+| ANV-21 | Celery application and worker wiring | **Done** |
+| ANV-22 | Stock ingest job | Next — *closes E5 and the backend* |
+| ANV-23 … ANV-41 | see `backlog.md` | Not started |
 
-**2,522 tests** passing with the full stack up (2,228 with Docker stopped — DB and S3 tiers skip),
-99% coverage. `ruff check` and `ruff format --check` clean across 161 files.
-The S3 tier genuinely executes: **29 tests against real MinIO**, verified.
+**2,591 tests** passing with the full stack up (2,291 with Docker stopped — DB, S3 and broker tiers
+skip), 99% coverage. `ruff check` and `ruff format --check` clean across 169 files.
+Container tiers genuinely execute: **29 S3 tests** against MinIO, **6 broker tests** against Redis.
 
 ---
 
@@ -91,22 +92,37 @@ The S3 tier genuinely executes: **29 tests against real MinIO**, verified.
 Only what is still outstanding. Once a ticket consumes one of these, delete it — the full record
 stays in [`ticket-log.md`](./ticket-log.md).
 
-**For ANV-21 (Celery) and ANV-22 (ingest) — fork safety, from ANV-20:**
-- **Never create an `S3Client` at module import or in a worker-boot hook.** Its aiohttp connector is
-  bound to the loop that made it, and **a Celery prefork worker forks** — two processes sharing one
-  socket fd is corruption, not a loud failure. Construct one **per task** and hold it for the task's
-  whole life (`async with S3Client(settings) as storage:`).
-- **`aioboto3.Session` is already shared** — `app.clients.s3.default_session`, `lru_cache`d. It holds
-  no socket and no loop, so it *is* fork-safe. Do not build your own per task.
-- The generalisable rule (now in `CLAUDE.md`): **split a client into its "cache-like, loop-free" half
-  and its "connection-owning, loop-bound" half, and scope the halves differently.**
-- `details["reason"] == "rate_limited"` is the reschedule signal for S3 too, and **no S3 error
-  carries an `attempts` key** — botocore owns its own retry loop and does not report a count.
-- Keys come from `app.domain.storage.export_key`, which needs `now` **and** `unique` from you —
-  entropy is an ambient input, same rule as the clock. `content_type_for` and
-  `resolve_download_ttl` are there too; do not re-derive a content-type table.
-- `download_url` exists but **no route mounts it** — whether a presigned URL should leave the API is
-  an open decision, not an oversight.
+**For ANV-22 (ingest) — the last backend ticket:**
+- The task body is **exactly** `return run_async(lambda: _ingest(...))`. `run_async` takes a
+  **factory, not a coroutine** (one built at the call site is built outside the loop that is about
+  to exist). The async half resolves `get_settings()` + `async with get_session()` and calls **one**
+  service method.
+- Give the task an explicit `name="jobs.ingest.<function>"` and add `"app.jobs.ingest"` to
+  `TASK_MODULES` — a derived sweep fails the suite until you do. Add a `BEAT_SCHEDULE` entry whose
+  `expires` is **shorter than its interval**; parameterised tests check that and that the name is
+  registered.
+- **Hold one `S3Client` for the task's whole life** (`async with S3Client(settings)`), never at
+  import or worker boot — its connector is loop-bound and a prefork worker forks.
+  `default_session()` is already shared and fork-safe; do not build your own.
+- **Decide retryability yourself. Do not add `autoretry_for`** — `ExternalServiceError` covers both
+  "vendor is down" (retry) and "key is blank" (never). Catch it, branch on `details["reason"]`
+  (`rate_limited` → reschedule, `not_configured` → let it fail), and call
+  `self.retry(exc=exc, countdown=self.retry_countdown())`. Note NewsAPI's `maximumResultsReached`
+  maps to `client_error`, not `rate_limited`, precisely because rescheduling it would loop forever.
+- **The task will run twice.** `acks_late` plus beat re-driving after a lost worker guarantees it.
+  `bulk_upsert` on a real constraint plus batch dedupe in `app/domain/ingest.py` is what makes that
+  safe — the repo does **no** dedupe and an internal duplicate raises `cannot affect row a second
+  time`.
+- If the fan-out needs longer than 960s, raise the time limits **and** check
+  `BROKER_VISIBILITY_TIMEOUT_SECONDS` still exceeds them — a test asserts the ordering, because
+  Redis has no real ack and a shorter visibility timeout redelivers to a second worker while the
+  first is still running.
+- Broker-tier tests live in `tests/integration/`, use `broker_app` / `broker_worker`, and **any stub
+  task must pass `shared=False`** — `@app.task` defaults to `shared=True` and registers itself on
+  every Celery app finalized afterwards, including the real one.
+- From ANV-20: `content_type_for`, `resolve_download_ttl` and `export_key` already exist;
+  `export_key` needs `now` **and** `unique` from you (entropy is an ambient input, same rule as the
+  clock). `download_url` exists but **no route mounts it** — an open decision, not an oversight.
 
 **For ANV-22 (ingest) — what ANV-18 deliberately left you:**
 - You receive `IntradaySeries` carrying `timezone` (e.g. `"US/Eastern"`) and a tuple of

@@ -971,3 +971,61 @@ stays a 502, because those genuinely are "we are up, the upstream is not".
 
 Test isolation is a **throwaway bucket per test** rather than a rollback, since S3 has no
 transaction — so the tier does not depend on `minio-init` and leaves nothing in the dev bucket.
+
+### ANV-21 — Done
+Commit `a686cc4`. **Verified independently:** `2291 passed / 305 skipped` with Docker stopped, ruff
+clean across 169 files, 100% coverage on `app/jobs/`. I also checked the config invariants directly:
+`visibility_timeout` 3600 > `task_time_limit` 960, `acks_late` on, `reject_on_worker_lost` off,
+prefetch 1.
+
+**The bridge is one function**, `run_async`, and every task uses it unchanged. Three deliberate
+properties: it takes a **factory, not a coroutine** (a coroutine built at the call site is built
+outside the loop that is about to exist — passing one is a `TypeError` naming the fix); it **never
+catches**, so a broken job is a red job rather than a green one that did nothing; and it disposes
+the engine **inside the task's own loop** before closing it.
+
+**The database engine had both fork problems, and they are different.** The engine object is inert
+but *its pool holds sockets*:
+1. **Loop-bound** — a pooled asyncpg connection handed to the next task's loop does not fail
+   cleanly, it hangs or gives "Future attached to a different loop". The bridge disposes in-loop.
+2. **Fork-hostile** — `reset_engine()` is wired to `worker_process_init`. It is **synchronous and
+   does no I/O** (a just-forked child has no loop to await `AsyncEngine.dispose` in) and reaches
+   `sync_engine.dispose(close=False)`: **abandon the pool, do not close the descriptors**, because
+   those are still the parent's and closing them turns a latent bug into a certain one. It also
+   added `current_engine()`, the read-only twin, so "has this process opened a pool?" is answerable
+   without the asking creating one.
+
+`os.fork` does not exist on this Windows host, and a test that skips on the only machine which runs
+it proves nothing — so both were tested as **properties** (two `run_async` calls get *different*
+engines; reset is callable with no loop, replaces the pool, forgets it, is a no-op when absent, and
+does not close, asserted via a recording engine).
+
+**`task_reject_on_worker_lost=False`, and the asymmetry is the point.** A lost *connection* is the
+network's fault and redelivery is free. A lost *process* is usually the **message's** fault — the
+task that OOMed will OOM again and kill every worker that picks it up, with no natural end. **Lose
+the run, keep the workers**; beat re-drives on the next tick. A job that cannot tolerate that
+carries its own durable completion record rather than flipping the flag.
+
+**`visibility_timeout` must exceed `task_time_limit`, and a test asserts it.** Redis has no real
+ack; set it shorter and a slow task is redelivered to a *second* worker while the first is still
+running it.
+
+**No `autoretry_for` on the base task class**, because `ExternalServiceError` covers both "vendor is
+down" (retry) and "key is blank" (never). It provides `retry_countdown()` instead — and note
+Celery's `retry_backoff` setting is honoured **only** by the wrapper `autoretry_for` installs, so a
+manual `self.retry()` ignores it. Shipping a class attribute that silently does nothing would be
+worse than shipping none.
+
+**Every beat entry carries an `expires` shorter than its interval**, enforced by a parameterised
+test. Beat publishes whether or not anything consumes, so without one, bringing workers back replays
+hours of stale ticks.
+
+**Proved end to end through real Redis and a real forked worker** — `pid=8` in the worker log is a
+prefork child (the main is pid 1), and beat's own first tick landed independently five minutes
+later. Eager mode alone would not have shown either.
+
+**Two Python/Celery gotchas found and documented:** `@app.task` defaults to `shared=True`, so a stub
+task defined on a throwaway app in a test **registers itself on the real application** too (fixed
+with `shared=False`); and `app/jobs/__init__.py` must **not** re-export `celery_app`, because the
+name shadows the *module* `app.jobs.celery_app` and anything reaching for a constant or signal in
+that module gets a Celery instance and an `AttributeError`.
