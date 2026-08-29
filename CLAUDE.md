@@ -229,6 +229,24 @@ Note that steps 5 and 6 both reuse step 4. **That reuse is the whole reason for 
   `deps`. Never `os.getenv` outside that module.
 - **Logging:** structured, request-id-tagged. No bare `print`.
 - **Auth:** JWT access + refresh (`python-jose`), bcrypt password hashing, `OAuth2PasswordBearer`.
+  The pair is `app.schemas.auth.TokenPair` (`{access_token, refresh_token, token_type}` — the
+  frontend parses those keys). **Every token carries a `type` claim** (`"access"` / `"refresh"`)
+  and verifying a token means checking that claim as well as the signature, or an access token
+  can be redeemed as a refresh token. A refresh token travels in a JSON body, never a query string.
+- **Lists return `Page[T]`, never a bare array.** `app.schemas.pagination.Page` is the one envelope:
+  `{items, total, limit, offset, has_more}`, offset paging, `limit` bounded by `MAX_PAGE_LIMIT`.
+  `total` counts every matching row, `has_more` is computed, and the two bounds are echoed so the
+  response is self-describing. A bare array cannot gain a key later without breaking clients.
+- **Schemas agree with columns by construction.** A validator's length cap is *imported* from the
+  model module's constant, never retyped, so widening a `VARCHAR` cannot leave a stale number in a
+  schema — and an oversized field is a 422 at the edge rather than a `StringDataRightTruncation`.
+  An output field is `| None` **exactly** when its column is nullable; a defensive `| None` makes
+  every client null-check a state that cannot happen. Money is `Decimal` end to end (it serialises
+  as a quoted JSON string — a JSON number would be a float and lose the fourth decimal place).
+- **A secret is never a field on an output schema.** `tests/unit/test_schemas.py` walks every
+  pydantic model in the `app.schemas` package and fails on a password-ish field outside a small
+  allowlist of request bodies, so a new schema is covered the moment it exists rather than when
+  somebody remembers to check it.
 - **Containers:** the compose service names *are* the in-network hostnames the settings default
   to — `db`, `db-test`, `redis`, `minio`, `api`, `worker`, `beat`, `web`. Renaming a service is a
   config change. Containers reach each other by service name on the service's own port; the

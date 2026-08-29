@@ -9,6 +9,8 @@ dependencies = [
     "sqlalchemy[asyncio]",
     "asyncpg",
     "alembic",
+    # `[email]` pulls in `email-validator`, without which `EmailStr` is just `str`.
+    "pydantic[email]",
     "pydantic-settings",
     "celery[redis]",
     "httpx",
