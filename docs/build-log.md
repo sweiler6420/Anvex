@@ -79,8 +79,9 @@ modified. What each contributes to Anvex:
 | ANV-20 | S3 client and storage service | **Done** |
 | ANV-21 | Celery application and worker wiring | **Done** |
 | ANV-22 | Stock ingest job | **Done** — *E5 complete; **the backend is done*** |
-| ANV-23 | Vite scaffold, Tailwind and test harness | Next — *first frontend ticket* |
-| ANV-24 … ANV-41 | see `backlog.md` | Not started |
+| ANV-23 | Vite scaffold, Tailwind and test harness | **Done** |
+| ANV-24 | API client layer | Next |
+| ANV-25 … ANV-41 | see `backlog.md` | Not started |
 
 **2,811 tests** passing with the full stack up (2,497 with Docker stopped — DB, S3 and broker tiers
 skip), 99% coverage. `ruff check` and `ruff format --check` clean across 176 files.
@@ -114,9 +115,32 @@ ANV-15's ownership sweep fails the suite if a new use case is added without isol
 - Add fakes **beside** the existing ones in `tests/helpers.py`, and keep them faithful to the
   awkward parts of the real repo — a forgiving fake silently passes the bug the test exists to catch.
 
-**For the frontend epic (ANV-23 onward) — API contract facts the UI must respect:**
-- **Node is not installed on this machine, by choice.** Every `npm` / `vite` / `vitest` command runs
-  **inside Docker**. `node:22-alpine` is already pulled locally.
+**Frontend mechanics (established by ANV-23):**
+- **Node is not installed on this machine, by choice.** Run commands in the container:
+  `docker compose --profile frontend exec web npm run test`, or one-shot
+  `docker run --rm -v "<repo>:/repo" -w /repo/frontend anvex/web:dev npm run build` — **mount the
+  repo root**, because `envDir` reaches one level up to the shared `.env`.
+- **`node_modules` lives at `/node_modules`, not `/app/node_modules`** (compose bind-mounts
+  `./frontend` over `/app` and would hide it — same argument as the backend's `/opt/venv`). **There
+  is no node_modules volume**, so a dependency change is `up -d --build`, never a stale volume.
+- **Never set `NODE_ENV=development` in the Dockerfile.** Vite honours an inherited `NODE_ENV` over
+  its own mode, so it silently ships a *development* React build — 330 kB with `jsxDEV`, versus
+  145 kB. ANV-23 hit this.
+- **Tailwind is v3.4 deliberately** — v4 is its own ticket, *after* the component ports, because its
+  default changes (border-color → `currentColor`, ring 1px, `shadow-sm` renamed,
+  `outline-none` → `outline-hidden`) would silently restyle every ported component.
+- **`src/lib/env.js` is the only module that touches `import.meta.env`.** Import `API_BASE_URL` /
+  `apiUrl(path)`. **An empty `API_BASE_URL` is meaningful** (same-origin, proxied) — never
+  `if (!API_BASE_URL) throw`.
+- **Mock at the network boundary with MSW**, never by stubbing `fetch`/`axios` — that is what keeps
+  interceptors under test rather than mocked away. Use `errorResponse()` / `pageResponse()` from
+  `src/test/msw/handlers.js` so a mock cannot invent a body the backend would never send.
+- Aliases `@`, `@lib`, `@components`, `@features`, `@hooks`, `@providers`, `@routes`, `@styles`,
+  `@test` are live in both Vite and vitest.
+- Gotcha: vitest stubs `.css` imports (including `?raw`), and `import.meta.url` is an `http:` URL
+  inside vitest — read files from disk relative to `process.cwd()`.
+
+**API contract facts the UI must respect:**
 - **Prices are quoted JSON strings**, not numbers — `"1234.5678"`. That is what preserves the fourth
   decimal; JSON numbers go through float and lose it. Chart code must `Number()` them.
 - **`stock_data`'s `datetime` is naive on purpose** — no `Z`, no offset. It is the exchange's local

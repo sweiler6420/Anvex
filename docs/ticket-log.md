@@ -1086,3 +1086,48 @@ as `186.1235`. No `IntegrityError` at any point.
 Added `tzdata` explicitly to `pyproject.toml`: `zoneinfo` has no IANA database on Windows, so the
 trading-hours rule would be *wrong* rather than absent without it. It had been arriving transitively
 via celery.
+
+### ANV-23 — Done
+Commit `273cc7f`, 39 new files, 25 frontend tests. **Verified independently:** the `web` container
+comes up **healthy**, `GET /` returns 200, the dev proxy reaches the API (`/health` → `{"status":"ok"}`),
+`npm run test` passes 25/25 **inside the container**, and the backend suite is untouched at
+`2497 passed / 319 skipped`.
+
+**Three real bugs found, two of them in the old app.**
+
+**1. RTFont never loaded — in the live site.** The old `src/index.css` points all ten `@font-face`
+at `/public/fonts/...`, but `public/` **is** the served root, so that URL resolves to
+`public/public/fonts/...` which does not exist. Every face 404'd and `font-gothic` fell back to
+Poppins, silently. *Confirmed by the orchestrator against the old repo.* Fixed to `/fonts/...` and
+verified over HTTP: `GET /fonts/AllRoundGothic-Bold.ttf` → 200, 69,620 bytes, TrueType magic. The
+old CSS also never defined `--primary`, which the carried-over neon shadows interpolate; now set.
+
+**2. Tailwind v4 was in `package.json` and doing nothing.** No `postcss.config.js`, no
+`@tailwindcss/postcss`, and `index.css` used v3 `@tailwind` directives against a v3-shaped config
+(CommonJS, `require('tailwindcss/colors')`, top-level `theme.fontSize`). **So there was no v4 setup
+to preserve.** Chose v3.4 deliberately: adopting v4 now would mean re-expressing everything as
+`@theme`/`@custom-variant` (v4 has no `fontWeight` namespace at all) *and* inheriting its default
+changes, which would silently restyle the ~40 components ANV-28→36 port verbatim. v4 is its own
+ticket, after the ports. The config is proven to take effect by running the **real PostCSS pipeline**
+and asserting on generated CSS — cyan `brand`, slate `neutral`, the font scale, class-based dark
+mode, both neon shadows, the `3xl` breakpoint.
+
+**3. `ENV NODE_ENV=development` in the dev stage shipped a development React build.** The obviously
+correct thing to write, and Vite honours an inherited `NODE_ENV` over its own mode — so
+`npm run build` emitted `react-dom.development` and `jsxDEV` at **330.63 kB** with no warning.
+Removing it: **144.98 kB**. Documented in the Dockerfile, README and `CLAUDE.md` §5.
+
+**`node_modules` lives at `/node_modules`, not `/app/node_modules`** — compose bind-mounts
+`./frontend` over `/app` and would hide it, the same argument as the backend's `/opt/venv`. Node
+resolves by walking *up*, so it works from any depth. **No node_modules volume**: the image layer is
+authoritative, so a dependency change is `up -d --build` rather than a stale volume nobody
+remembers to remove.
+
+**One `.env`, honoured two ways:** `envDir` points at the repo root so `VITE_*` reaches
+`import.meta.env`, and under compose the same values arrive as process env via `env_file`. Proven
+both ways. `WEB_DEV_PROXY_TARGET` deliberately carries **no** `VITE_` prefix, so an in-network
+hostname can never be inlined into the browser bundle. `src/app-config.json` is not ported.
+
+**MSW is wired at the network boundary**, with `onUnhandledRequest: 'error'` so an unmocked call
+fails loudly. `handlers.js` exports `errorResponse()` and `pageResponse()` so a mock cannot invent a
+body the backend would never send.
