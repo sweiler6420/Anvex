@@ -85,10 +85,11 @@ modified. What each contributes to Anvex:
 | ANV-26 | Auth state and token lifecycle | **Done** |
 | ANV-27 | TanStack Router and route guards | **Done** |
 | ANV-28 | Layout, header and dark-mode switcher | **Done** — *frontend foundation complete* |
-| ANV-29 | Login page | Next — *first page ticket* |
-| ANV-30 … ANV-41 | see `backlog.md` | Not started |
+| ANV-29 | Login page | **Done** |
+| ANV-30 | Sign-up page | Next |
+| ANV-31 … ANV-41 | see `backlog.md` | Not started |
 
-**233 frontend tests** passing in-container, lint clean. Backend: 2,811. **Total: 3,044.**
+**277 frontend tests** passing in-container, lint clean. Backend: 2,811. **Total: 3,088.**
 
 **2,811 tests** passing with the full stack up (2,497 with Docker stopped — DB, S3 and broker tiers
 skip), 99% coverage. `ruff check` and `ruff format --check` clean across 176 files.
@@ -271,6 +272,36 @@ ANV-15's ownership sweep fails the suite if a new use case is added without isol
   sections arrive with ANV-32, and jsdom has neither layout nor `IntersectionObserver`, so it would
   be unverifiable code observing elements that do not exist. Active state comes from the router's
   location instead. **ANV-32 should decide whether it wants scroll-spy back.**
+
+**The page/form pattern (ANV-29) — every page ticket copies this:**
+Five parts, in order: local `useState` per field (a half-typed form is not application state); a
+**pure** validator called first with an early return, so an invalid submit **never reaches the
+network**; one `await` on the feature operation; `catch (err)` → `toApiError(err)` → branch on
+**`err.code`** and display `err.message`; **no navigation at all**. A `submitting` flag guards the
+handler *and* disables the button (two different failure modes) and is deliberately **not** cleared
+on success — the guard is already unmounting the page.
+- **Keep the placeholder's `data-testid`** (`route-sign-up`, etc.) so the ANV-27/28 routing tests
+  need no edits.
+- **ARIA the old pages lacked entirely:** `htmlFor`/`id` on every control (the old login had
+  **zero** of each, so neither field had an accessible name), `aria-invalid` + `aria-describedby` on
+  a failed field, and `role="alert"` slots **rendered unconditionally and left empty** — a live
+  region must exist *before* its text arrives, since inserting region and text together is the case
+  screen readers handle worst. The old visibility toggle was `onClick` on an `aria-hidden` `<svg>`:
+  no tab stop, no role, unusable from a keyboard.
+- Write **both** harnesses: a `renderLogin`-style one (real router, stubbed `AuthContext`) for
+  validation/ARIA/failures, and a full-`App` + MSW one for anything about destinations or storage.
+
+**The sign-up → login hand-off (for ANV-30):**
+- `frontend/src/features/auth/handoff.js` — `navigate({to: LOGIN_ROUTE, replace: true, state: signUpHandoffState({username})})`.
+- **Decision: hand off the username only, not the password.** Browsers persist session-history
+  state to disk for tab restore, so a password passed this way can outlive the tab.
+  `signUpHandoffState({username})` is complete and valid; the login page prefills the identifier and
+  leaves the password empty.
+- The hand-off **wins over** the remembered username — someone creating a second account must not be
+  handed the first one's name.
+- **Test trap:** `createBrowserHistory` *overwrites* an entry's whole state at startup when it finds
+  neither `key` nor `__TSR_key` on it, so a hand-made `window.history.replaceState` fixture must
+  include them. A real `navigate({state})` already does; this only bites test rigs.
 
 **API contract facts the UI must respect:**
 - **Prices are quoted JSON strings**, not numbers — `"1234.5678"`. That is what preserves the fourth

@@ -1388,3 +1388,47 @@ test.**
 removed fails 6 (TanStack's defaults make `/` a prefix of every route, so Home stays lit on
 `/research`, and ignore the fragment, so all five marketing items light at once); logout raising the
 wrong reason fails 4.
+
+### ANV-29 — Done
+Commit `5167eb7`, 44 new tests (233 → **277**). **Verified independently:** 277 pass, lint clean.
+
+**The old login page had no accessible names at all.** I confirmed this directly against
+`AverageInvestorWeb/src/components/authenticate/Login.jsx`: **zero `htmlFor` attributes and zero
+`id` attributes**. Its per-field message was a second `<label>` associated with nothing, its form
+error a bare `<p>` with no role, and the visibility toggle was `onClick` on an `aria-hidden="true"`
+`<svg>` — invisible to screen readers **and** unreachable by keyboard. All fixed, plus
+`autoComplete="username"`/`"current-password"` (the old `autoComplete={rememberMe ? … : 'off'}`
+fought password managers).
+
+**`role="alert"` slots are rendered unconditionally and left empty** — a live region must exist
+*before* its text arrives; inserting region and text together is the case screen readers handle
+worst.
+
+**The strongest mutation result in the build so far:** replacing the real `<button>` toggle with
+`<div role="button" tabIndex={0} onClick>` fails **exactly one** test — the keyboard one.
+`user.click` passes happily on the div shim; `focus()` + `{Enter}` does not. That is the difference
+between a control that looks accessible and one that is.
+
+**It deleted a test that could not discriminate — the fourth ticket to do so.** *"Does not put the
+handed-off password into storage"* passed under **every** mutation including reintroducing the
+password write, because it never signs in, so the code that could store a password never runs. It
+was replaced with *"carries a handed-off password to the API and not to storage"*, which signs in
+for real and fails on both mutations. It also flagged, unprompted, that a whitespace-trim test
+survives removing the submit-path `.trim()` because the validator trims independently — intended
+defence in depth, and the trim is covered elsewhere.
+
+**Remember-me proof is a full storage dump** after a real sign-in through the form: the key set is
+exactly `{anvex.refresh_token, anvex.remembered_username, theme}`, and the JSON of the whole store
+contains neither the password nor the access token. The checkbox state is *derived* from
+`readRememberedUsername() !== null` rather than kept as a third key.
+
+**The header's "Log In" link stays visible on `/login`** — TanStack's `<Link>` already writes
+`aria-current="page"`, so a screen reader announces "Log In, link, current page", which is the
+standard answer and better than a nav that reshuffles per route. The claim is now asserted rather
+than incidental.
+
+**A warning it raised about the hand-off, now a decision:** browsers persist session-history state
+to disk for tab restore, so a password handed from sign-up to login through router state can
+**outlive the tab**. ANV-30 hands off the username only.
+
+11 mutations run. It also corrected a now-false line in `login.jsx`'s docstring left by ANV-27.
