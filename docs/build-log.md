@@ -52,8 +52,9 @@ modified. What each contributes to Anvex:
 | ANV-1 | Monorepo scaffold and architecture contract | **Done** |
 | ANV-2 | Backend uv project and settings | **Done** |
 | ANV-3 | Async database layer and Alembic | **Done** |
-| ANV-4 | App factory, middleware and error contract | Next |
-| ANV-5 … ANV-41 | see `backlog.md` | Not started |
+| ANV-4 | App factory, middleware and error contract | **Done** |
+| ANV-5 | Docker Compose stack and backend Dockerfile | Next |
+| ANV-6 … ANV-41 | see `backlog.md` | Not started |
 
 ### ANV-1 — Done
 Commits `0ccc0df`, `9ae4224` on `main`.
@@ -137,3 +138,49 @@ skips cleanly with no database), ruff clean, and the throwaway Postgres containe
 - `alembic revision --autogenerate` runs a ruff `check --fix` post-write hook, so generated
   migrations land lint-clean.
 - `psycopg` was **not** needed and is not installed; `postgres_sync_dsn` remains unused.
+
+### ANV-4 — Done
+Commit `3370387`, 25 files. **Verified independently:** 138 passed / 1 skipped, 98% coverage,
+ruff clean, and a live `uvicorn` run confirmed `/health` 200, `/docs` 200, `/health/ready` 503.
+
+- `app/domain/errors.py` — stdlib-only exception hierarchy. **The status mapping deliberately does
+  not live on the exception classes**; it lives in `app/middleware/errors.py`, which is what keeps
+  `app/domain/` free of HTTP. Lookup walks the MRO, so a future subclass inherits its parent's
+  status and an unmapped one degrades to 500 rather than crashing the handler.
+- `app/middleware/` — `request_id` (pure ASGI), `logging` (structlog + access log), `errors`
+  (mapping + all four handlers), and `setup.install_middleware()` as the single place stack order
+  is decided.
+- `app/main.py` — `create_app(settings)` factory plus a module-level `app`. `/health` (liveness,
+  no I/O) and `/health/ready` (readiness, real `SELECT 1` via `app/db/health.ping`).
+- `app/deps/` — `get_session` wrapping ANV-3's context manager, and `get_settings_dep`.
+- `app/api/v1/__init__.py` — an empty `APIRouter(prefix="/v1")` aggregator, so ANV-11 onward adds
+  routers with a one-line change.
+
+**The error envelope is now a hard contract** (documented in `CLAUDE.md` §4). Every non-2xx —
+domain error, pydantic 422, unknown route, unhandled crash — returns the same four keys, with
+`details` as `{}` rather than `null` so clients index it unconditionally and branch on `code`.
+
+**Bug found live:** a 500 bypassed the request-ID middleware entirely. Starlette's
+`ServerErrorMiddleware` sits *outside* all user middleware, so it sends its response without
+passing through the send wrapper — meaning the one response a client most needs to correlate was
+the only one missing the header. Fixed by having `error_response()` set `X-Request-ID` itself,
+with the middleware de-duplicating.
+
+**Carried into ANV-5:**
+- The container healthcheck must hit **`/health`**, not `/health/ready` — readiness depends on
+  Postgres, so using it as a healthcheck restart-loops the API whenever the DB blips. Use
+  `/health/ready` for the `depends_on` gate and, later, the ALB target group.
+- Entrypoint `uvicorn app.main:app` (or `app.main:create_app --factory`). Startup opens no socket,
+  so the API boots even if Postgres is still starting.
+- Logs go to stdout as JSON whenever `ANVEX_ENV != local`, console-rendered when it is.
+- The compose `web` origin must appear in `API_CORS_ORIGINS`.
+
+**Carried into ANV-6:**
+- `tests/conftest.py` holds only `ALLOWED_ORIGIN` and the `settings` / `app` / `client` fixtures —
+  **extend these, do not add parallel ones.**
+- `client` uses `ASGITransport(app=app, raise_app_exceptions=False)`. That flag is load-bearing:
+  without it the transport re-raises through `ServerErrorMiddleware` and you can never assert on
+  the 500 body a real client actually receives.
+- The `app` fixture builds a fresh instance per test so `dependency_overrides` cannot leak.
+- `ERROR_BODY_KEYS` in `tests/api/test_middleware.py` is the canonical assertion set — worth
+  promoting to a shared helper when the harness lands.
