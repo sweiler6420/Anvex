@@ -300,6 +300,80 @@ The Celery app, task definitions, and beat schedule. A task is a thin entrypoint
 dependencies and calls **one** service — the same shape as an API handler. Business logic never
 lives in a task body. Tasks are idempotent and safe to retry.
 
+- **`run_async` is the one bridge, and every task crosses it unchanged** (ANV-21). Celery runs a
+  task synchronously; everything else in the backend is `async`. Exactly one module reconciles
+  that — `app/jobs/base.py` — and a task that invents its own bridge is how this layer rots. The
+  shape is fixed and is two functions:
+  ```python
+  @celery_app.task(name="jobs.news.sync_symbol", bind=True)
+  def sync_symbol(self: AnvexTask, symbol: str) -> int:
+      return run_async(lambda: _sync_symbol(symbol))
+
+  async def _sync_symbol(symbol: str) -> int:
+      settings = get_settings()
+      async with get_session() as session:                       # app/db/session.py
+          return await NewsService(session, settings).sync_for_symbol(symbol=symbol)
+  ```
+  The sync half is the Celery entry point and contains nothing but the bridge call; the async half
+  resolves its collaborators and calls **one** service — the API handler's rule, for the API
+  handler's reason, so the same service serves a route and a job. `run_async` takes a **factory,
+  not a coroutine**: `run_async(work())` would build the coroutine outside the loop that is about
+  to exist, so passing one is a `TypeError` with the fix in the message. Exceptions are never
+  caught there — a swallowed failure is a green job that did nothing, which is worse than a red one.
+- **A pooled connection must not outlive the loop that opened it, and `asyncio.run` per task is
+  how that is guaranteed.** `run_async` creates a loop, runs the coroutine, and calls
+  `dispose_engine()` **inside that loop** before it closes. The accepted cost is stated rather than
+  discovered: a worker gets **no cross-task connection pooling** and pays one Postgres connect per
+  task. That is the right trade because a task is a batch (one session, many queries — the
+  handshake amortises) and because the alternative, a long-lived loop in a background thread, adds
+  a thread whose crash is invisible and a pool that must survive child recycling. Revisit it when a
+  task's own runtime approaches the connect cost, or when the queue is many short tasks per second —
+  not before, and with a measurement.
+- **Split by loop-boundness, then by fork-safety; the halves are scoped differently.** ANV-20's
+  client rule generalises past clients, and the database engine is the case that proves it. The
+  engine *object* is inert, but its pool holds sockets, so: `aioboto3.Session` and `get_settings()`
+  are cache-like and loop-free (`lru_cache`d, shared, fork-safe); an `S3Client` and an `AsyncEngine`
+  own connections and are per-task. **Never construct a connection-owning object at import, at
+  worker boot, or in a `worker_init` hook** — a prefork worker forks after that, and two processes
+  on one descriptor corrupt silently rather than failing loudly.
+- **A fork is handled in the child, synchronously, without closing anything.** `app/db/engine.py`
+  exposes `reset_engine()` — wired to Celery's `worker_process_init` — which swaps in an empty pool
+  via `sync_engine.dispose(close=False)` and forgets the engine. Two things are load-bearing: it is
+  **not** a coroutine, because a just-forked child has no loop to await one in; and it does **not**
+  close, because those descriptors are still the parent's and closing them turns a latent bug into a
+  certain one. `current_engine()` is its read-only twin, and it exists so "has this process opened a
+  pool?" can be asked without `get_engine()` answering it in the affirmative.
+- **Every task passes an explicit `name="jobs.<module>.<function>"`.** Celery's default is the
+  dotted import path, so renaming a module orphans every message already queued and every beat entry
+  naming it. A sweep asserts the convention across the registry, and a second sweep derives the
+  worker's import list from the contents of `app/jobs/` — a new job module that is not registered
+  fails the suite instead of silently never running.
+- **The base task sets the retry *spacing*; the task decides what is *retryable*.** `AnvexTask` has
+  deliberately **no `autoretry_for`**: `app/clients/`'s one exit covers both "the vendor is down"
+  (retry) and "the key is blank" (retrying forever will not fill it in), so a job branches on
+  `details["reason"]` and calls `self.retry(exc=exc, countdown=self.retry_countdown())` when it
+  means it. `retry_countdown()` exists because Celery's `retry_backoff` setting is only honoured by
+  the wrapper `autoretry_for` installs — a manual `self.retry()` ignores it — and shipping a class
+  attribute that silently does nothing is worse than a method.
+- **At-least-once, and the asymmetry is the decision.** `task_acks_late=True` (a lost connection or
+  a graceful restart redelivers — which is the same decision as "tasks are idempotent", not a second
+  one) with `task_reject_on_worker_lost=False` stated explicitly. A lost *connection* is the
+  network's fault and redelivery is free; a lost *process* is very often the *message*'s fault — the
+  task that OOMed will OOM again, and redelivering it kills every worker that picks it up, with no
+  natural end. **Lose the run, keep the workers**; beat re-drives the job on its next tick. A job
+  that cannot tolerate that carries its own durable "did this window complete" record; it does not
+  flip the flag. `worker_prefetch_multiplier=1` follows from `acks_late` — a bigger prefetch means a
+  restart redelivers a batch of half-run tasks.
+- **The broker's `visibility_timeout` must exceed `task_time_limit`.** Redis has no real
+  acknowledgement, so `kombu` redelivers any message whose worker has not finished in time; shorter,
+  and a slow task is handed to a *second* worker while the first is still running it. Both are
+  constants in `app/jobs/celery_app.py` and a test asserts the ordering, because the failure is
+  invisible until a job gets slow.
+- **Every beat entry carries an `expires` shorter than its interval.** Beat publishes whether or not
+  anything is consuming, so a queue nobody is draining collects one message per tick and bringing
+  the workers back replays hours of stale ticks at once. With an expiry there is at most one pending
+  run of any job, and the next tick *is* the retry.
+
 ### `app/middleware/` — cross-cutting request concerns
 Request ID injection, structured access logging, timing, exception-to-HTTP mapping, CORS wiring.
 Applies to every request; never resource-specific.
@@ -785,6 +859,9 @@ migrates `db-test`), `tests/helpers.py` (shared assertions and stubs), `tests/fa
 | `s3_bucket` | function | a brand-new bucket, emptied and dropped afterwards |
 | `s3_settings` | function | `Settings` pointed at host-side MinIO and that bucket |
 | `s3_client` | function | a real `S3Client` on the container, closed at teardown |
+| `broker_available` | session | skips unless the compose `redis` container answers |
+| `broker_app` | function | the application `celery_app`, repointed at Redis databases 14/15 and flushed either side |
+| `broker_worker` | function | `broker_app` plus a real Celery worker consuming in a thread of this process |
 
 - **What each tier may touch.** `tests/unit/` — nothing but fakes (no fixtures, no I/O).
   `tests/api/` —
@@ -798,6 +875,15 @@ migrates `db-test`), `tests/helpers.py` (shared assertions and stubs), `tests/fa
   the `db` marker, and the test skips with a reason when Postgres is unreachable; `-m "not db"`
   deselects the tier. So do not ask for `db_session` "just in case", and a `respx`-only test in
   `tests/integration/` keeps running with Docker stopped.
+- **Eager mode proves the task body; only a broker proves the wiring.** `task_always_eager` runs a
+  task by calling it — nothing is serialised, no connection is opened, no worker is involved, and it
+  keeps passing when the broker URL is nonsense. So a job ships with both: eager tests in
+  `tests/unit/` for the body, and `tests/integration/` tests that publish to real Redis and let a
+  real consumer pick the message up. The broker tier uses Redis **databases 14 and 15**, not the
+  app's 0 and 1, so a `worker` the developer happens to have running cannot eat a message the tests
+  published — which would present as a test hanging on a result that never arrives. A stub task
+  registered for a test passes **`shared=False`**: `@app.task` defaults to `shared=True`, which
+  registers it on every Celery app finalized afterwards, including the application's.
 - **A new container tier is three things, and it copies the database tier exactly.** A `tests/<x>.py`
   module holding the connection details (its own test-only `BaseSettings` on the same repo-root
   `.env`, a `@cache`d `unavailable_reason()` where *every* failure is a skip, and the create/drop
@@ -805,7 +891,9 @@ migrates `db-test`), `tests/helpers.py` (shared assertions and stubs), `tests/fa
   into a marker, and fixtures that hand the test its **own** namespace. `tests/storage.py` is the
   worked example: isolation is a throwaway bucket rather than a rolled-back transaction, because S3
   has no transaction — but the shape, the skip and the "one number in `.env` moves both the compose
-  mapping and the client" rule are identical. Nothing in `app/` learns the tier exists.
+  mapping and the client" rule are identical. `tests/broker.py` (ANV-21) is the third and copies it
+  again; isolation there is a flushed pair of dedicated Redis databases. Nothing in `app/` learns
+  the tier exists.
 - **A tier that skips in both runs proves nothing**, so a ticket adding one reports the count that
   actually executed with the container up (`-m <marker>`), not just that the suite was green.
 - **The harness migrates, it does not `create_all`.** `db_engine` runs `alembic upgrade head` once

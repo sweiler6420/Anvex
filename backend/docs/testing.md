@@ -81,7 +81,8 @@ tests exercise the schema production actually gets, which is the whole reason `C
 
 **The default suite is green with Docker stopped.** A test that requests any `db_*` fixture
 is auto-marked `db` and skips with a reason naming the fix; the database is probed once per
-session. Nothing fails because a container is not running.
+session. The `s3_*` and `broker_*` fixtures do the same with the `s3` and `broker` markers.
+Nothing fails because a container is not running.
 
 The marker is applied from the *fixtures a test requests*, not from its directory — so a
 `respx`-only client test in `tests/integration/` keeps running with the daemon stopped.
@@ -121,6 +122,24 @@ All of them live in `tests/conftest.py`. **Extend that file; never start a paral
 | --- | --- | --- |
 | `mock_http` | function | a `respx` router intercepting every outbound `httpx` call |
 | `_deterministic_fakes` | autouse | re-seeds faker and resets factory sequences before each test |
+
+### Celery broker
+
+`docker compose up -d redis` is all this tier needs. It publishes to Redis **databases 14 and
+15**, never the app's 0 and 1 — a `worker` you happen to have running would otherwise consume
+a message the tests published, and the test would hang on a result that never arrives.
+
+| Fixture | Scope | What you get |
+| --- | --- | --- |
+| `broker_available` | session | skips the test unless the compose `redis` answers |
+| `broker_app` | function | the application `celery_app` repointed at the test databases, flushed either side |
+| `broker_worker` | function | `broker_app` plus a real Celery worker consuming in a thread of this process |
+
+Eager mode (`task_always_eager`) belongs in `tests/unit/` and proves the *task body*; it
+serialises nothing and involves no worker, so it would keep passing against a nonsense broker
+URL. Anything about the *wiring* needs `broker_worker`. A stub task registered inside a test
+passes `shared=False` — `@app.task` defaults to `shared=True`, which would also register it on
+the application's Celery app for the rest of the session.
 
 ---
 

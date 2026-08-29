@@ -12,7 +12,7 @@
 # Usage:
 #   docker compose up -d db redis minio minio-init api   # the working dev stack
 #   docker compose up -d db-test                         # backend test database (ANV-6)
-#   docker compose --profile celery up -d                # worker/beat placeholders (ANV-21)
+#   docker compose --profile celery up -d worker beat    # Celery worker + scheduler (ANV-21)
 #   docker compose --profile frontend up -d              # web placeholder (ANV-23)
 #   docker compose down -v                               # stop and drop volumes
 
@@ -166,14 +166,17 @@ services:
     # Healthcheck is inherited from the image: GET /health (liveness, no I/O).
     restart: unless-stopped
 
-  # -------------------------------------------------------- Celery placeholders (ANV-21)
+  # -------------------------------------------------------------- Celery (ANV-21)
   #
-  # ANV-21 owns the real Celery app (`app/jobs/celery_app.py`). Inventing one here would
-  # mean two definitions of the broker wiring and a guaranteed conflict, so these are
-  # *defined but not started*: they sit behind the `celery` profile and run a trivial
-  # command that only proves the image, the env and the Redis dependency are wired.
-  # ANV-21 replaces the `command:` with the real worker/beat invocations and, if it wants
-  # them up by default, drops the `profiles:` key.
+  # `app/jobs/celery_app.py` is the single definition of the broker wiring, the execution
+  # policy and the schedule; nothing about any of that is repeated here. These two services
+  # differ only in which half of Celery they run: `worker` consumes, `beat` publishes on a
+  # timer. Running two `beat` processes would double every scheduled job, so there is
+  # exactly one and it is never scaled.
+  #
+  # They stay behind the `celery` profile: the day-to-day dev stack is the API and its
+  # stores, and a worker that is not needed is a container competing for the same Postgres
+  # connections. Bring them up with `docker compose --profile celery up -d worker beat`.
   worker:
     profiles: ["celery"]
     image: anvex/api:dev
@@ -182,24 +185,37 @@ services:
       dockerfile: Dockerfile
       target: runtime
     env_file: .env
-    # The image HEALTHCHECK polls /health on :8000; a worker serves no HTTP, so it would
-    # be permanently unhealthy. ANV-21 can replace this with a `celery inspect ping`.
     healthcheck:
-      disable: true
+      # The image's own HEALTHCHECK polls /health on :8000 and a worker serves no HTTP, so
+      # it is replaced rather than disabled. `inspect ping` goes out over the broker and
+      # back, so it answers "this worker is consuming", which is the thing worth knowing —
+      # a process that is up but not consuming looks identical from outside. `-d` pins it
+      # to *this* container's node so a second worker cannot answer on its behalf.
+      test: ["CMD-SHELL", "celery -A app.jobs.celery_app:celery_app inspect ping -d celery@$$(hostname) --timeout 10 >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
     environment:
       POSTGRES_HOST: db
       REDIS_HOST: redis
       S3_ENDPOINT_URL: http://minio:9000
     volumes:
       - ./backend:/app
+    # Prefork is the default pool on Linux and is what the fork rules in `app/db/engine.py`
+    # and `app/jobs/base.py` are written for; it is spelled out so that changing it is a
+    # decision. `--concurrency 2` keeps a dev worker's Postgres footprint small.
     command:
-      - python
-      - -c
-      - |
-        print("worker placeholder: ANV-21 replaces this with `celery -A app.jobs.celery_app worker`", flush=True)
-        import time
-        while True:
-            time.sleep(3600)
+      - celery
+      - -A
+      - app.jobs.celery_app:celery_app
+      - worker
+      - --pool
+      - prefork
+      - --concurrency
+      - "2"
+      - --loglevel
+      - INFO
     depends_on:
       redis:
         condition: service_healthy
@@ -215,22 +231,27 @@ services:
       dockerfile: Dockerfile
       target: runtime
     env_file: .env
-    # The image HEALTHCHECK polls /health on :8000; a worker serves no HTTP, so it would
-    # be permanently unhealthy. ANV-21 can replace this with a `celery inspect ping`.
+    # No healthcheck: beat exposes no inspect interface and consumes nothing, so there is
+    # nothing to ask it. Its liveness shows up as the tasks it publishes.
     healthcheck:
       disable: true
     environment:
       REDIS_HOST: redis
     volumes:
       - ./backend:/app
+    # `--schedule` is not decoration: beat's shelve file defaults to `celerybeat-schedule`
+    # in the working directory, which is the bind-mounted repo — it would write a binary
+    # file into the source tree on every start. /tmp is container-local and disposable, and
+    # losing it only means the next tick fires immediately.
     command:
-      - python
-      - -c
-      - |
-        print("beat placeholder: ANV-21 replaces this with `celery -A app.jobs.celery_app beat`", flush=True)
-        import time
-        while True:
-            time.sleep(3600)
+      - celery
+      - -A
+      - app.jobs.celery_app:celery_app
+      - beat
+      - --schedule
+      - /tmp/anvex-celerybeat-schedule
+      - --loglevel
+      - INFO
     depends_on:
       redis:
         condition: service_healthy

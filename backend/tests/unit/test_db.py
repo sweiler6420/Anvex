@@ -8,6 +8,7 @@ Migrations against a real database are covered by `tests/integration/test_migrat
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 
 import pytest
@@ -92,6 +93,94 @@ async def test_dispose_engine_releases_and_forgets_the_engine() -> None:
 async def test_dispose_engine_is_safe_when_nothing_was_created() -> None:
     await db_engine.dispose_engine()  # must not raise
     assert db_engine._engine is None
+
+
+# ------------------------------------------------------------- surviving a fork (ANV-21)
+#
+# A Celery prefork worker forks. Anything in the inherited pool is a socket two processes
+# would then interleave bytes on, which corrupts a Postgres session silently rather than
+# failing loudly — so the child has to abandon the pool, and must not *close* it, because
+# the descriptors it holds are still the parent's.
+
+
+def test_current_engine_reports_without_creating() -> None:
+    """The read-only twin of ``get_engine``.
+
+    It exists so that "has this process opened a pool yet?" can be asked without the asking
+    creating one — which is the only way ANV-21's worker-parent rule is assertable at all.
+    """
+    assert db_engine.current_engine() is None
+
+    engine = db_engine.get_engine()
+
+    assert db_engine.current_engine() is engine
+    assert db_engine.current_engine() is db_engine.current_engine()
+
+
+def test_reset_engine_forgets_the_inherited_engine() -> None:
+    first = db_engine.get_engine()
+
+    db_engine.reset_engine()
+
+    assert db_engine.current_engine() is None
+    assert db_engine.get_engine() is not first
+
+
+def test_reset_engine_replaces_the_pool_rather_than_reusing_it() -> None:
+    """Whatever the child inherited must be unreachable, not merely forgotten."""
+    engine = db_engine.get_engine()
+    inherited_pool = engine.sync_engine.pool
+
+    db_engine.reset_engine()
+
+    assert engine.sync_engine.pool is not inherited_pool
+
+
+def test_reset_engine_does_not_close_the_parents_connections() -> None:
+    """The half that is easy to get wrong, and expensive when it is.
+
+    Closing an inherited connection from the child closes it for the *parent* too — turning
+    a latent fork bug into a certain one. SQLAlchemy spells "abandon without closing" as
+    ``dispose(close=False)``; this asserts the child asks for exactly that.
+    """
+    closed: list[bool] = []
+
+    class RecordingSyncEngine:
+        def dispose(self, close: bool = True) -> None:
+            closed.append(close)
+
+    class RecordingEngine:
+        sync_engine = RecordingSyncEngine()
+
+    db_engine._engine = RecordingEngine()  # type: ignore[assignment]
+
+    db_engine.reset_engine()
+
+    assert closed == [False]
+    assert db_engine.current_engine() is None
+
+
+def test_reset_engine_needs_no_event_loop() -> None:
+    """A just-forked child has no loop yet, so the reset cannot be a coroutine.
+
+    This test is synchronous on purpose: if ``reset_engine`` ever grew an ``await`` it would
+    fail here rather than in a worker at 3am.
+    """
+    db_engine.get_engine()
+
+    with pytest.raises(RuntimeError):
+        asyncio.get_running_loop()
+
+    db_engine.reset_engine()  # must not raise
+
+    assert db_engine.current_engine() is None
+
+
+def test_reset_engine_is_safe_when_nothing_was_created() -> None:
+    """A worker boot hook must not fail because the parent never touched the database."""
+    db_engine.reset_engine()  # must not raise
+
+    assert db_engine.current_engine() is None
 
 
 # --------------------------------------------------------------------------- sessions

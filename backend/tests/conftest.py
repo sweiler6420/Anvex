@@ -13,11 +13,13 @@ The three tiers (``CLAUDE.md`` §6) and what each may touch:
   redirected with ``app.dependency_overrides``. No database.
 * ``tests/integration/`` — repos and services against real Postgres via ``db_session``;
   clients against mocked HTTP via ``mock_http``; the S3 client against the compose ``minio``
-  container via ``s3_client``.
+  container via ``s3_client``; Celery against the compose ``redis`` container via
+  ``broker_app`` / ``broker_worker``.
 
 **Skipping is fixture-driven, not directory-driven.** Any test requesting one of the
 ``db_*`` fixtures is auto-marked ``db`` and skips with a reason when ``db-test`` does not
-answer; the ``s3_*`` fixtures do the same with an ``s3`` marker and :mod:`tests.storage`. A
+answer; the ``s3_*`` fixtures do the same with an ``s3`` marker and :mod:`tests.storage`, and
+the ``broker_*`` fixtures with a ``broker`` marker and :mod:`tests.broker`. A
 ``respx``-only test in the same directory keeps running. That is what makes
 ``uv run python -m pytest`` green on a machine with Docker stopped, as ``CLAUDE.md`` §6
 requires.
@@ -31,6 +33,8 @@ from uuid import uuid4
 
 import pytest
 import respx
+from celery import Celery
+from celery.contrib.testing.worker import start_worker
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, create_async_engine
@@ -40,7 +44,7 @@ from app.clients.s3 import S3Client
 from app.deps.session import get_session
 from app.main import create_app
 from app.settings import Settings
-from tests import database, storage
+from tests import broker, database, storage
 from tests.factories import reset_randomness
 
 #: Fixed origin used by the CORS assertions, so they never depend on the developer's
@@ -66,6 +70,14 @@ DATABASE_FIXTURES = frozenset(
 #: compose `minio` container, which becomes an `s3` marker and a skip when it is not there.
 STORAGE_FIXTURES = frozenset({"minio_available", "s3_bucket", "s3_settings", "s3_client"})
 
+#: And again for the Celery broker (ANV-21). Requesting any of these means the test needs
+#: the compose `redis` container, which becomes a `broker` marker and a skip without it.
+BROKER_FIXTURES = frozenset({"broker_available", "broker_app", "broker_worker"})
+
+#: Seconds `broker_worker` waits for the in-thread worker to stop before giving up. Short:
+#: the tasks it runs are a heartbeat and a stub.
+WORKER_SHUTDOWN_TIMEOUT_SECONDS = 15.0
+
 
 # ---------------------------------------------------------------------------------------
 # Markers and collection
@@ -83,6 +95,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "s3: needs the compose `minio` container. Applied automatically to any test that "
         "requests an `s3_*` fixture; such a test skips when MinIO is unreachable.",
     )
+    config.addinivalue_line(
+        "markers",
+        "broker: needs the compose `redis` container. Applied automatically to any test "
+        "that requests a `broker_*` fixture; such a test skips when Redis is unreachable.",
+    )
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -93,6 +110,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker("db")
         if STORAGE_FIXTURES & fixtures:
             item.add_marker("s3")
+        if BROKER_FIXTURES & fixtures:
+            item.add_marker("broker")
 
 
 # ---------------------------------------------------------------------------------------
@@ -359,3 +378,56 @@ async def s3_client(s3_settings: Settings) -> AsyncIterator[S3Client]:
         yield client
     finally:
         await client.aclose()
+
+
+# ---------------------------------------------------------------------------------------
+# Celery broker
+# ---------------------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def broker_available() -> None:
+    """Skip the requesting test unless the compose ``redis`` container answers.
+
+    Probed once per session (:func:`tests.broker.unavailable_reason` is cached) — the same
+    deal :func:`database_available` and :func:`minio_available` make.
+    """
+    reason = broker.unavailable_reason()
+    if reason is not None:
+        pytest.skip(reason)
+
+
+@pytest.fixture
+def broker_app(broker_available: None) -> Iterator[Celery]:
+    """The application's :data:`~app.jobs.celery_app.celery_app`, on the test Redis.
+
+    Both test databases are flushed on the way in and out, which is this tier's isolation:
+    Redis has no transaction to roll back, so a test starts from empty and leaves it empty —
+    the same argument :func:`s3_bucket` makes for a throwaway bucket.
+    """
+    with broker.use_test_broker() as celery:
+        yield celery
+
+
+@pytest.fixture
+def broker_worker(broker_app: Celery) -> Iterator[Celery]:
+    """A real Celery worker consuming from the test Redis for the duration of one test.
+
+    ``celery.contrib.testing.worker.start_worker`` runs the worker in a thread of this
+    process on the ``solo`` pool — so it is a genuine consumer doing a genuine round trip
+    through Redis, but it does **not** fork. That is a deliberate limit and not a gap in
+    coverage: the fork rules are tested as properties in ``tests/unit/`` (an engine never
+    crosses a task boundary; ``reset_engine`` abandons a pool without closing it), because
+    ``os.fork`` does not exist on the Windows host this suite runs on and a test that skips
+    on the only machine that runs it proves nothing.
+
+    ``perform_ping_check=False`` skips Celery's own ``celery.ping`` probe, which is only
+    registered when the testing fixtures are installed as a Celery plugin.
+    """
+    with start_worker(
+        broker_app,
+        perform_ping_check=False,
+        shutdown_timeout=WORKER_SHUTDOWN_TIMEOUT_SECONDS,
+        loglevel="info",
+    ):
+        yield broker_app
