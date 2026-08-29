@@ -1131,3 +1131,57 @@ hostname can never be inlined into the browser bundle. `src/app-config.json` is 
 **MSW is wired at the network boundary**, with `onUnhandledRequest: 'error'` so an unmocked call
 fails loudly. `handlers.js` exports `errorResponse()` and `pageResponse()` so a mock cannot invent a
 body the backend would never send.
+
+### ANV-24 — Done
+Commit `2bd6f48`, 34 new tests (25 → **59**). **Verified independently:** 59 pass and lint is clean
+in-container.
+
+**I mutation-tested the single-flight guard myself.** Removing the one line
+`if (refreshInFlight) return refreshInFlight` fails **2 tests**, including
+*"fires exactly ONE refresh for N concurrent 401s and replays all of them"*. Restored: 59 pass, tree
+clean. The test is load-bearing, not decorative.
+
+**The promise *is* the queue.** One module-level `refreshInFlight`; everything that 401s while it
+runs awaits the same promise and then replays with the resolved token. A separate subscriber array
+would reintroduce a window between "a refresh is running" and "I am on its list" — here the check
+and the assignment are synchronous with each other, so no such window exists. The slot is cleared in
+a `finally` that first confirms it still owns the slot.
+
+**The concurrency test's MSW handler is single-use, exactly like the real endpoint** — it rotates
+the pair and answers 401 `invalid_token` to a spent token, behind a 25 ms delay forcing overlap. So
+a broken guard fails it twice over: on the call count *and* on the outcome.
+
+**The refresh call goes out on `publicApi`**, which is load-bearing in two ways: it must not carry
+the expired bearer token, and — more importantly — a 401 from `/v1/auth/refresh` on `authApi` would
+**re-enter the interceptor currently awaiting it**.
+
+**All three old bugs confirmed by reading, not assumed.** (1) `useAxiosPrivate.js` tests
+`status === 403`; Anvex returns **401** for missing/expired/malformed/wrong-type tokens and 403 only
+for `ForbiddenError` — so it never fired on the real signal and burned a rotation on genuine
+permission denials. (2) `prevRequest.sent` is a flag on *one request's config*, and
+`useRefreshToken.js` does rotate and does log out on failure, so the failure mode is real. (3)
+`useApi.js`'s five functions each catch everything and return `{status, message, error, detail}`
+with no `data` and no throw. A fourth, unasked: `apiPostFunction` sends its params as a query string
+**and** as the body.
+
+**Two judgement calls worth keeping.** Refresh fires on any 401 *except* `invalid_token` /
+`wrong_token_type` — a page reload holds a refresh token but no access token, so its first protected
+call is a 401 `unauthorized`, precisely what refresh exists to rescue; the two excluded codes
+describe a token that is *wrong*, not *old*. And **only a refusal ends the session**: `clear()` fires
+on a 4xx from the refresh endpoint, not on a network failure or a 5xx, because signing a user out
+over a wifi blip discards tokens that are still valid. A small departure from a literal reading of
+the ticket, and the right one.
+
+**Client-side error codes are disjoint from backend codes**, asserted against the list in
+`app/domain/errors.py` — so one `switch (err.code)` covers both origins. A non-envelope body (a
+proxy's HTML 502) is `malformed_response` with the real status, because guessing a code from it
+would be a lie a caller then branches on.
+
+**No resource module was added, deliberately** — `features/` does not exist yet, and a
+`lib/api/stocks.js` would collect every feature's URLs in one shared module and undo feature-first
+on the second consumer. The only URL the transport knows is `REFRESH_PATH`, because it makes that
+call itself.
+
+The build stayed at 144.98 kB because nothing reachable from `main.jsx` imports `lib/api` yet — so
+it also built once with a temporary entry import to prove the layer bundles (88 modules, 200.85 kB,
+`jsxDEV: 0`), then reverted.

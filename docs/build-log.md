@@ -80,8 +80,9 @@ modified. What each contributes to Anvex:
 | ANV-21 | Celery application and worker wiring | **Done** |
 | ANV-22 | Stock ingest job | **Done** — *E5 complete; **the backend is done*** |
 | ANV-23 | Vite scaffold, Tailwind and test harness | **Done** |
-| ANV-24 | API client layer | Next |
-| ANV-25 … ANV-41 | see `backlog.md` | Not started |
+| ANV-24 | API client layer | **Done** |
+| ANV-25 | Theme and error providers | Next |
+| ANV-26 … ANV-41 | see `backlog.md` | Not started |
 
 **2,811 tests** passing with the full stack up (2,497 with Docker stopped — DB, S3 and broker tiers
 skip), 99% coverage. `ruff check` and `ruff format --check` clean across 176 files.
@@ -139,6 +140,28 @@ ANV-15's ownership sweep fails the suite if a new use case is added without isol
   `@test` are live in both Vite and vitest.
 - Gotcha: vitest stubs `.css` imports (including `?raw`), and `import.meta.url` is an `http:` URL
   inside vitest — read files from disk relative to `process.cwd()`.
+
+**The API client layer (ANV-24) — what ANV-25/26 plug into:**
+- **`installTokenStore({getAccessToken, getRefreshToken, setTokens, clear})`** is the seam.
+  `client.js` calls `getTokenStore()` **per request, never at import**, so a provider mounting later
+  works. `setTokens` receives the **whole rotated pair** — storing only the access token breaks the
+  next refresh. **`clear()` is where the redirect to `/login` belongs**; the transport deliberately
+  never navigates, which is what makes it testable outside React.
+- **Every failure is an `ApiError` with a `code`.** The five client-side codes (`network_error`,
+  `timeout`, `request_cancelled`, `malformed_response`, `unknown_error`) are **disjoint from every
+  backend code**, asserted by test — so one `switch (err.code)` covers both origins and nobody
+  writes `if (!err.response)`. `request_cancelled` should be **swallowed silently**: it is a
+  component unmounting, not a failure.
+- **Only a refusal ends the session.** `clear()` fires on a 4xx from the refresh endpoint — *not* on
+  a network failure or a 5xx. Signing a user out because their wifi blipped discards tokens that are
+  still valid.
+- Refresh fires on **any 401 except** `invalid_token` / `wrong_token_type`. A page reload holds a
+  refresh token but no access token, so its first protected call is a 401 `unauthorized` — exactly
+  the case refresh exists to rescue. **For persist-login, just fire the first protected call.**
+- `POST /v1/auth/login` is **form-encoded** (`OAuth2PasswordRequestForm`), so it needs an explicit
+  `Content-Type` override of the instance default. Login and recovery go on **`publicApi`**.
+- Import from `@lib/api`, not the submodules. **There is deliberately no resource module** —
+  per-resource `api.js` belongs to each feature.
 
 **API contract facts the UI must respect:**
 - **Prices are quoted JSON strings**, not numbers — `"1234.5678"`. That is what preserves the fourth
