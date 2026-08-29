@@ -56,8 +56,9 @@ modified. What each contributes to Anvex:
 | ANV-4 | App factory, middleware and error contract | **Done** |
 | ANV-5 | Docker Compose stack and backend Dockerfile | **Done** |
 | ANV-6 | Pytest harness | **Done** — *E1 Foundation complete* |
-| ANV-7 | Models and initial migration | Next |
-| ANV-8 … ANV-41 | see `backlog.md` | Not started |
+| ANV-7 | Models and initial migration | **Done** |
+| ANV-8 | Pydantic schemas | Next |
+| ANV-9 … ANV-41 | see `backlog.md` | Not started |
 
 ### ANV-1 — Done
 Commits `0ccc0df`, `9ae4224` on `main`.
@@ -279,3 +280,62 @@ living in `tests/integration/` still runs with Docker stopped.
 Also: `tests/integration/test_migrations.py` was rewritten onto `throwaway_database_url`. It had
 been using the *app* settings (`POSTGRES_HOST=db`), so it could never run from the host — it has
 now executed for the first time.
+
+### ANV-7 — Done
+Commit `1370fa1`, 16 files, migration `0002_core_tables`. **Verified independently:**
+`225 passed / 5 skipped` with `db-test` up, `170 passed / 60 skipped` with it stopped, ruff clean.
+I also ran `alembic upgrade head` and `alembic check` myself against a fresh database —
+**"No new upgrade operations detected."** Models and migration genuinely agree.
+
+**The bug that nearly made empty autogenerate impossible.** The Postgres login role is *also* named
+`anvex`. Postgres' stock `search_path` is `"$user", public`, so `current_schema()` returned `anvex`
+and SQLAlchemy reported it as the connection's **default** schema. Alembic represents the default
+schema as `None`, and ANV-3's `include_name` compared `name == SCHEMA` — so it filtered out our own
+schema, reflected nothing, and proposed re-creating all six tables. Fixing that exposed two more:
+reflected FKs carried `referred_schema=None` against the metadata's `"anvex"` (every FK reported
+dropped-and-added), and `alembic_version` looked like a removed table because its exclusion keys on
+`version_table_schema`. Fix: `server_settings={"search_path": "public"}` on **alembic's engine
+only**, making `anvex` non-default so all reflection is fully qualified, plus an `include_name` that
+resolves `None` back to the real default before comparing. Invisible before ANV-7 because there were
+no tables to reflect.
+
+**Schema deviations from the old repo, all deliberate:**
+
+| Change | Why |
+| --- | --- |
+| `watchlist_data` real composite PK | the old `__mapper_args__` key was ORM-only; the table had none, so a stock could be added to a watchlist repeatedly |
+| `ticker_symbol` 5 → **16** | `BRK.B`, `BTC-USD` do not fit in 5 |
+| `company` unique → **indexed, not unique** | GOOG and GOOGL are both "Alphabet Inc." |
+| `isin` NOT NULL → **nullable, unique** | model and migration disagreed; AlphaVantage returns no ISIN, so requiring it would block ANV-22 from ever creating a stock |
+| prices NUMERIC(8,2) → **(12,4)** | old ceiling was 999,999.99 — BRK.A is within an order of magnitude, and overflow is a hard `DataError` mid-ingest |
+| `stock_data.id` → **BIGSERIAL** | the old default referenced a sequence no migration ever created |
+| `created_at` → **TIMESTAMPTZ** | the migration created a naive `TIMESTAMP` |
+| `UNIQUE (stock_id, date, time)` | ANV-22's upsert conflict target — idempotency as a database rule, not a code habit |
+| range index on **`date` alone** | the unique constraint's btree already serves "this stock, this date range"; a duplicate would be waste. What it *cannot* serve is a cross-stock date window, because `date` is not its leading column |
+| `username` → VARCHAR(50), `email` → VARCHAR(320) | model said unbounded, migration said `VARCHAR(20)` — below ANV-12's own 7+ minimum. 320 is RFC 5321's max forward path |
+
+**`ondelete` (the old schema declared none, so deleting a user simply failed):** `stock_data` →
+CASCADE, `watchlists.user_id` → CASCADE, `watchlist_data.watchlist_id` → CASCADE, but
+`watchlist_data.stock_id` → **RESTRICT** — a stock is reference data, and deleting one people are
+actively watching is a mistake worth surfacing. Mirrored on the ORM with `passive_deletes=True`, and
+**`passive_deletes="all"` on `Stock.watchlist_entries`** — without it the ORM loads the membership
+rows and tries to NULL their `stock_id`, turning a deliberate RESTRICT into a confusing NOT NULL
+violation. `position` is deliberately **not** unique per watchlist: ANV-15's reorder swaps two
+ordinals and a non-deferrable constraint would reject the intermediate state.
+
+**Carried into ANV-8 (schemas) and ANV-9 (repos):**
+- Column naming is `<entity>_id`, not `id` — the sole exception is `stock_data.id`.
+- `users.password` keeps its legacy name and holds the **hash**. `UserOut` must never expose it.
+- **Only these are nullable:** `stocks.isin`; `politicians.state`, `chamber`, `dob`, `gender`.
+  Every other `XOut` field is non-optional.
+- Prices are `Decimal` (NUMERIC(12,4)), **not float**. `date` and `time` are separate columns;
+  ANV-14 recombines them into the `datetime` field the charts expect — that is a schema/service
+  concern, not a column.
+- Length caps to mirror in validators: username 50, email 320, ticker 16, company/market 150,
+  ISIN 12, watchlist title 50, politician names 80.
+- `WatchlistData` has **no surrogate key** — identity is the `(watchlist_id, stock_id)` pair.
+- **Repos must eager-load**; lazy loading is impossible under asyncio.
+  `test_models.py::TestRelationships` shows the exact `selectinload` chains. `Watchlist → entries`
+  is already ordered by `position` on the relationship, so no caller sorts.
+- `Stock` deletion is RESTRICT-guarded, so `StockRepo.delete` raises `IntegrityError` for a watched
+  stock — ANV-13 should map that to `ConflictError`, not let it surface as a 500.
