@@ -1185,3 +1185,45 @@ call itself.
 The build stayed at 144.98 kB because nothing reachable from `main.jsx` imports `lib/api` yet — so
 it also built once with a temporary entry import to prove the layer bundles (88 modules, 200.85 kB,
 `jsxDEV: 0`), then reverted.
+
+### ANV-25 — Done
+Commit `a1dded6`, 24 new tests (59 → **83**). **Verified independently:** 83 pass and lint is clean
+in-container; `ThemeProvider` owns only the `theme` storage key, so nothing collides with ANV-26's
+tokens.
+
+**It reintroduced each bug and ran the suite, rather than reasoning about the tests.** The
+dropped-timer-handle bug fails *"does not let a second error inherit the first error's timer"* on the
+timer count **and**, with that assertion removed, still fails on the behaviour
+(`expected 'none' to be 'second_error'`). The unmount case fails on `expected 1 to be +0` — and that
+count assertion *is* the "no state update after unmount" proof, because **React 18 no longer warns**,
+so a `console.error` spy would have proven nothing. The module-scope storage read fails three tests,
+including the real user-visible consequence: the theme freezes at whatever it was when the bundle
+loaded.
+
+**One honest exception, volunteered.** The `classList.remove(...THEME_CLASSES)` rewrite is a
+latent-hazard cleanup, **not a live bug fix** — with exactly two themes it is behaviourally identical
+to the old `getPrevious()`, and its first attempt at a test *passed with the bug reintroduced*. It
+rewrote it as an invariant test ("exactly one theme class on the root through every transition") and
+the test comment says outright that it does not fail on the old implementation, and why. That is the
+right way to report a test that cannot fail.
+
+**`prefers-color-scheme` is now respected — but only when nothing is stored.** A stored choice,
+including an explicit *light* on a dark machine, always wins. `darkMode: 'class'` means the OS
+preference has no effect unless read, so the old unconditional `|| "light"` gave every user with a
+dark desktop a bright screen on first visit and on every new device.
+
+**Storage unavailability is handled consistently:** the `window.localStorage` property read,
+`getItem` and `setItem` are each inside the `try`, because a browser can refuse any one of the three
+independently (Safari private mode throws only on write). The read moved out of module scope into a
+lazy `useState` initialiser, so importing the module no longer touches storage.
+
+**Three files per provider, not two** — `XContext.js` is separate because a `.jsx` exporting both a
+component and a non-literal constant trips `react-refresh/only-export-components`, and because a
+hook in `@hooks` must reach the context without importing a component.
+
+**Deliberately not built** (and said so rather than building it): no toast, no error boundary, no
+banner, no `matchMedia` change listener (a live OS-preference subscription needs a policy for "what
+if the user has toggled since"), and no anti-flash script.
+
+*Orchestrator note:* it flagged a stale docstring in `App.jsx` naming the wrong ticket and left it
+alone as out of scope. Corrected here — it now names ANV-27, which actually owns the router.

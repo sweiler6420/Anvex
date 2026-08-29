@@ -81,8 +81,9 @@ modified. What each contributes to Anvex:
 | ANV-22 | Stock ingest job | **Done** — *E5 complete; **the backend is done*** |
 | ANV-23 | Vite scaffold, Tailwind and test harness | **Done** |
 | ANV-24 | API client layer | **Done** |
-| ANV-25 | Theme and error providers | Next |
-| ANV-26 … ANV-41 | see `backlog.md` | Not started |
+| ANV-25 | Theme and error providers | **Done** |
+| ANV-26 | Auth state and token lifecycle | Next |
+| ANV-27 … ANV-41 | see `backlog.md` | Not started |
 
 **2,811 tests** passing with the full stack up (2,497 with Docker stopped — DB, S3 and broker tiers
 skip), 99% coverage. `ruff check` and `ruff format --check` clean across 176 files.
@@ -162,6 +163,28 @@ ANV-15's ownership sweep fails the suite if a new use case is added without isol
   `Content-Type` override of the instance default. Login and recovery go on **`publicApi`**.
 - Import from `@lib/api`, not the submodules. **There is deliberately no resource module** —
   per-resource `api.js` belongs to each feature.
+
+**The providers (ANV-25) — what ANV-26/27/28 plug into:**
+- **`useDarkMode()` → `{theme, isDark, setTheme, toggleTheme}`.** The old `DarkModeSwitcher` and
+  `Header` destructure `{theme, toggleTheme}`, so those ports are a straight copy. **The provider
+  owns the `light`/`dark` class on `<html>`** — no other component may touch it.
+- **`useErrors()` → `{error, isNetworkFailure, setError, clearError}`.** `error` is an `ApiError` or
+  `null`. `setError` accepts anything throwable and normalises with `toApiError`, so
+  `catch (err) { setError(err) }` is the whole integration. `isNetworkFailure` is the derived
+  "cannot reach the server" flag, so a banner need not import `@lib/api`. `ERROR_TIMEOUT_MS` (10s)
+  is exported if a banner wants a countdown.
+- **`request_cancelled` is swallowed and leaves any existing error on screen** — an unmounting
+  sibling must not wipe a real login failure.
+- **A logout triggered by `clear()` should not go through `setError`** — it is a navigation, not a
+  failure.
+- `ThemeProvider` owns only the `localStorage` key `theme`; nothing collides with ANV-26's tokens.
+  `main.jsx` currently nests `ThemeProvider > ErrorsProvider > App`; mount the auth provider
+  **inside** `ErrorsProvider` if it wants to raise through `useErrors`.
+- Contexts default to `null` and both hooks **throw** naming the missing provider, rather than
+  handing back a half-working default the way the old `ErrorsContext` did.
+- **Known gap, deliberately left for whoever owns the shell (ANV-28):** the theme class is applied
+  in an effect, so a first paint before React mounts still flashes the light default. The fix is a
+  two-line blocking script in `index.html`.
 
 **API contract facts the UI must respect:**
 - **Prices are quoted JSON strings**, not numbers — `"1234.5678"`. That is what preserves the fourth

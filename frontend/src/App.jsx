@@ -4,7 +4,7 @@ import { API_BASE_URL } from './lib/env'
 /**
  * The scaffold shell (ANV-23).
  *
- * Deliberately static and deliberately small: ANV-25 replaces it with the TanStack Router
+ * Deliberately static and deliberately small: ANV-27 replaces it with the TanStack Router
  * tree (CLAUDE.md §5) and ANV-28..36 port the real screens. What it is here for is to
  * prove the whole pipeline end to end — JSX through @vitejs/plugin-react, SVGR through
  * `?react`, the carried-over Tailwind tokens (`font-gothic`, `text-4xl`, `brand-*`,
