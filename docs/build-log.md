@@ -58,8 +58,9 @@ modified. What each contributes to Anvex:
 | ANV-6 | Pytest harness | **Done** — *E1 Foundation complete* |
 | ANV-7 | Models and initial migration | **Done** |
 | ANV-8 | Pydantic schemas | **Done** |
-| ANV-9 | Repositories | Next |
-| ANV-10 … ANV-41 | see `backlog.md` | Not started |
+| ANV-9 | Repositories | **Done** — *E2 Data layer complete* |
+| ANV-10 | Security utilities and pure token domain | Next |
+| ANV-11 … ANV-41 | see `backlog.md` | Not started |
 
 ### ANV-1 — Done
 Commits `0ccc0df`, `9ae4224` on `main`.
@@ -390,3 +391,57 @@ offset.
 chart code must `Number()` the value.
 
 New dependency: `pydantic[email]` (without it `EmailStr` is a plain `str`).
+
+### ANV-9 — Done · **E2 Data layer complete**
+Commit `2170608`, 13 files, 132 new tests. **Verified independently:** `480 passed / 5 skipped`
+with `db-test` up, `293 passed / 192 skipped` with it stopped, ruff clean. I also grepped the whole
+`app/` package for `select(` outside `app/repos/` — **none**. The §3 layering rule is holding in
+fact, not just on paper.
+
+**Session is passed in, not held.** Every method takes `AsyncSession` first. That makes each repo
+stateless, so they are exported as module-level singletons (`user_repo`, `stock_repo`, …) and a
+service never has to be a factory. A repo that captured a session could also outlive it — a live
+footgun once Celery tasks and request handlers share an engine.
+
+**The login lookup is one statement**, `select(User).where(or_(email == ident, username == ident))`
+— not two sequential lookups, because the second only runs on a miss and leaks which arm failed
+through timing.
+
+**Bulk upsert** uses `pg_insert(...).on_conflict_do_update(index_elements=["stock_id","date","time"])`
+— naming the columns so Postgres infers ANV-7's unique index rather than hard-coding a constraint
+name. Only prices and volume are in `set_`, so an updated candle keeps its `id`. Four tests hold the
+property, including the same batch twice → `(3, 3)` with the table at 3 rows, and a revised candle
+overwriting values while keeping its row. An empty batch returns 0 without issuing SQL (empty
+`VALUES` is a syntax error).
+
+**Search escaping:** `ilike` over ticker *or* company with `%`, `_`, `\` escaped, and blank meaning
+"no filter". The old API's `contains(func.lower(search))` matched nothing and treated `""` as
+everything.
+
+**Carried into ANV-11 → ANV-16 — queries deliberately NOT provided:**
+- **No "watchlist owned by user" query.** `get_by_id`/`get_with_entries` do not check ownership —
+  that is authorization, a service concern. **ANV-15 must compare `watchlist.user_id` to the token
+  subject itself** or it will serve one user another user's list. (The old API did this inline in
+  the handler.)
+- `get_by_ticker` is **exact and case-sensitive** — upper-casing user input is the service's
+  one-line job; folding case in the repo would defeat the unique index. `list_stocks(search=...)`
+  *is* case-insensitive: a search box is a different question from an identifier.
+- No name search on politicians (state/party/chamber only); no `stock_data` bulk delete; **no
+  repo-level dedupe on either `bulk_upsert`** — deduplicate in `app/domain/` first. A batch with an
+  internal duplicate raises `cannot affect row a second time`, and a test documents that as a
+  caller obligation.
+
+**Things that will bite otherwise:**
+- `limit` is a **required** keyword on every paginated method — the repo does not import
+  `app.schemas`, so it cannot default to `DEFAULT_PAGE_LIMIT`.
+- Paginated methods return `(rows, total)`; the service builds `Page[T]`. `total` is counted before
+  the window, so `offset=99` over 4 rows gives `([], 4)`.
+- `bulk_upsert` is a Core statement and does **not** update the session's identity map — re-read or
+  `expunge_all` if ORM objects are still held.
+- `update(session, instance, values)` sets exactly the keys given, which is what makes
+  `model_dump(exclude_unset=True)` work: `{"isin": None}` clears, an absent key leaves alone.
+- `max_position` returns `None` on an empty watchlist, not `-1`. The append rule
+  `(max_position or -1) + 1` is a rule and belongs in `app/domain/watchlist.py`.
+- Eager loading is a **separate method**, never a boolean flag. A test asserts the plain
+  `list_for_stock` raises `MissingGreenlet` on `.stock` while the eager variant works, so the split
+  cannot be mistaken for an oversight.
