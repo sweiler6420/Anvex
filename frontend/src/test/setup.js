@@ -20,6 +20,18 @@ beforeAll(() => {
   server.listen({ onUnhandledRequest: 'error' })
 })
 
+/**
+ * jsdom has no layout, so `window.scrollTo` is one of its "not implemented" stubs: calling
+ * it prints a full stack trace to stderr and returns. TanStack Router (ANV-27) calls it on
+ * every completed navigation to put a new page at the top, so without this every routing
+ * test buries its real output under jsdom traces for a no-op.
+ *
+ * A no-op assignment, not a `vi.fn()` — nothing should assert on scrolling, and a shared
+ * spy in the setup file would be state leaking between tests. A test that genuinely cares
+ * can install its own.
+ */
+window.scrollTo = () => {}
+
 afterEach(() => {
   cleanup()
   server.resetHandlers()

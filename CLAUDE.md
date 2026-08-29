@@ -1042,6 +1042,85 @@ router, the header and the login page alike — a cross-feature hook by definiti
   method in place, and gives a mock that never fires — a storage-failure test that passes for the
   wrong reason. Seed a value first, too, or the assertion holds vacuously.
 
+### Routing and route guards (ANV-27)
+
+`routes/` owns the tree and the guards; `lib/router.js` owns the router instance and the
+sign-out destination. **`react-router-dom` was never installed in Anvex** — the ticket's
+"replace v6" premise described the old CRA app, not this one — so TanStack Router went in
+as the first and only router.
+
+- **Code-based routing, not file-based.** TanStack's file-based mode generates a
+  `routeTree.gen.ts` from a Vite plugin: a generated file in the source tree, a codegen step
+  before `vitest` can resolve a route, and a second place (the plugin config) that decides
+  what a route is. Eight routes do not earn that. One module per route exporting a route
+  object, assembled by `routes/tree.js`, is what lets a test import `routeTree`, build a
+  router over a memory history, and run the real guards with no build step.
+- **A route module exports a route object and no component.** The component is an inline
+  arrow (`component: () => <Thing />`) or an import. A `.jsx` file exporting both a route and
+  a component loses Fast Refresh — the same `react-refresh/only-export-components` rule
+  ANV-25 hit — which is why `NotFound` lives in its own file rather than beside `rootRoute`.
+- **A guard is a `beforeLoad`, and that is not a stylistic preference.** The old
+  `RequireAuth` was a route *element*: it rendered, read `useAuth()`, and returned
+  `<Navigate>`. The protected branch is therefore entered before the decision is made — the
+  loader runs, the component mounts, its effects fire a protected request, and a second
+  render unwinds it. `beforeLoad` runs while the navigation is being resolved, before any of
+  the destination's code exists, so a refusal renders nothing and requests nothing. Throwing
+  `redirect()` cancels the pending navigation instead of racing it.
+- **There is no boot window, so there is no pending component.** ANV-26's `restore()` is a
+  synchronous `localStorage` read in a ref initialiser during the provider's first render, so
+  `context.auth.isAuthenticated` is settled the first time any `beforeLoad` runs. Nothing
+  awaits. The backlog's "pending component covers the silent-refresh boot window" described a
+  window that ANV-26 designed out; verified against `AuthProvider.jsx`, not assumed.
+- **`isAuthenticated` is provisional and the guard is deliberately not authoritative.**
+  Making it so would mean an awaited round trip on every protected navigation — `PersistLogin`'s
+  blocking spinner, moved one layer down. `onSignOut` corrects it after the fact.
+- **`AuthProvider` mounts above `RouterProvider`, and the order is load-bearing.** React runs
+  effects bottom-up, so a `RouterProvider` above the store would start its initial route load
+  against the anonymous default token store. ANV-26 installs the store during *render* to
+  close that window; do not undo either half.
+- **The session reaches the router as `<RouterProvider context={{ auth }} />`, not as a
+  module import.** `RouterProvider` merges the prop into `router.options` during its own
+  render, which is before the initial load fires from a descendant effect, so the first
+  `beforeLoad` already sees the real session. `createAppRouter` still seeds an anonymous
+  context so a guard never has to null-check.
+- **Only a *gained* session invalidates the router.** A route already matched does not
+  re-read `context`, so a login must `router.invalidate()` for the guards to re-run — that is
+  what completes the redirect round trip. A *lost* session must not: `onSignOut` is ANV-26's
+  single authority on where a sign-out lands, and `router.navigate` is asynchronous, so a
+  simultaneous invalidation can still see the protected match and issue a competing
+  `/login?redirect=…` for a logout that is supposed to be a plain `/login`.
+- **`createAppRouter` is a factory, never a module-level singleton.** A router carries
+  navigation state, a history and a match cache, so one shared instance would let a test that
+  navigates decide where the next test starts. The app creates exactly one, in a `useState`
+  initialiser.
+- **"Where do they go after signing in" is written once, in `/login`'s `beforeLoad`.** The
+  same `redirectIfAuthenticated` covers "an authenticated user typed /login" and "the login
+  form just succeeded", so a login page contains no navigation code at all. The old app had
+  `/research` hardcoded in `Login.jsx` while `RequireAuth` separately remembered somewhere
+  else, and the two disagreed.
+- **The `redirect` search param is attacker-controlled and is sanitised at the route's
+  edge.** `sanitiseRedirect` keeps only a value starting with a single `/` — rejecting
+  absolute URLs, `javascript:`, protocol-relative `//host`, and `/\host` (browsers normalise
+  the backslash) — and rejects `/login` itself, which would otherwise bounce an authenticated
+  user between the login page and the login page. Without it, our own login page is an open
+  redirect aimed at users at the exact moment they are primed to type a password.
+- **`redirect({ href })` is for *external* redirects and infers `reloadDocument`.** Returning
+  a user to an internal href therefore means splitting it into `{to, search, hash}` — a full
+  document reload would discard the in-memory access token, which is the opposite of what
+  "return to where you came from" should cost.
+- **The root route declares `validateSearch: () => ({})`.** TanStack merges a parent match's
+  search into its child's and a route without a `validateSearch` passes the raw query string
+  straight through, so without this a child's sanitised param would sit in
+  `Route.useSearch()` beside whatever else was in the URL. A search param exists only where a
+  route declared it.
+- **An unknown path renders a 404 page; it does not redirect to `/`.** A silent bounce makes
+  a broken link indistinguishable from a working one, changes the address bar so the wrong
+  URL cannot be reported, and pushes a history entry. The page is public: guarding it would
+  make "sign in first" versus "not found" an oracle for which paths exist.
+- **A route's URL is a constant in `routes/paths.js`**, imported by the routes, the guards
+  and the sign-out handler alike. Not to be confused with a *feature's* API path
+  (`features/auth/api.js`'s `LOGIN_PATH` is `/v1/auth/login`).
+
 ### Frontend test harness (ANV-23)
 
 The mirror of §6's backend rules: **extend the one setup file and the one MSW server; never start a
@@ -1065,6 +1144,11 @@ second.**
 - vitest stubs `.css` imports (`?raw` included) unless `test.css` is on, and `import.meta.url` is an
   `http:` URL inside vitest — a test that needs a file's text reads it from disk relative to
   `process.cwd()`.
+- **`setup.js` no-ops `window.scrollTo`** (ANV-27). jsdom has no layout, so it is one of the
+  "not implemented" stubs that prints a full stack trace to stderr and returns; TanStack Router
+  calls it on every completed navigation, so without the stub every routing test buries its real
+  output. A plain no-op assignment, not a shared `vi.fn()` — a spy in the setup file is state
+  leaking between tests, and a test that genuinely cares installs its own.
 
 ---
 
