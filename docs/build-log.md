@@ -76,11 +76,13 @@ modified. What each contributes to Anvex:
 | ANV-17 | Client base | **Done** |
 | ANV-18 | AlphaVantage client | **Done** |
 | ANV-19 | NewsAPI client, service and routes | **Done** |
-| ANV-20 | S3 client and storage service | Next |
-| ANV-21 … ANV-41 | see `backlog.md` | Not started |
+| ANV-20 | S3 client and storage service | **Done** |
+| ANV-21 | Celery application and worker wiring | Next |
+| ANV-22 … ANV-41 | see `backlog.md` | Not started |
 
-**2,261 tests** passing with `db-test` up (1,996 with it stopped, DB tier skipping), 99% coverage.
-`ruff check` and `ruff format --check` are both clean across all 152 files.
+**2,522 tests** passing with the full stack up (2,228 with Docker stopped — DB and S3 tiers skip),
+99% coverage. `ruff check` and `ruff format --check` clean across 161 files.
+The S3 tier genuinely executes: **29 tests against real MinIO**, verified.
 
 ---
 
@@ -89,24 +91,22 @@ modified. What each contributes to Anvex:
 Only what is still outstanding. Once a ticket consumes one of these, delete it — the full record
 stays in [`ticket-log.md`](./ticket-log.md).
 
-**For ANV-20 (S3):**
-- **`BaseHTTPClient` is HTTP transport and you are not on it.** An SDK-reached vendor shares the
-  *error and logging* contract but not the transport. `ExternalServiceError` with a `reason` in
-  `details` is the contract; the `Failure` enum in `app/clients/base.py` is HTTP-shaped, so decide
-  deliberately whether to reuse its members or name S3's own.
-- **The AST sweep globs the package**, so it already covers your module — including the
-  `app.schemas` ban. Define your return models in `app/clients/s3.py`.
-- **Reuse the not-configured pre-flight pattern, do not re-derive it:** check the credential
-  *before* the call, raise `ExternalServiceError` **directly** (not via `_error`, which needs a
-  `Failure` describing how a call went wrong — no call was made), with
-  `details = {"reason": "not_configured", "setting": "<ENV_VAR>"}`. S3 has real local defaults
-  (MinIO), so it may not need this — but this is the shape if it can be unconfigured.
-- **The client-lifetime question is open and yours if you want it.** `app/deps/news.py` builds and
-  closes a client per request, giving up cross-request pooling. `aioboto3` has the same shape of
-  question and would be the second caller — that is when a lifespan-owned, worker-shareable client
-  becomes knowable. Only the dep factory has to change.
-- `tests/helpers.FakeNewsApiClient` + `make_article` are the precedent for faking a client: record
-  the calls, raise real `ExternalServiceError`s, **never return `None` on failure**.
+**For ANV-21 (Celery) and ANV-22 (ingest) — fork safety, from ANV-20:**
+- **Never create an `S3Client` at module import or in a worker-boot hook.** Its aiohttp connector is
+  bound to the loop that made it, and **a Celery prefork worker forks** — two processes sharing one
+  socket fd is corruption, not a loud failure. Construct one **per task** and hold it for the task's
+  whole life (`async with S3Client(settings) as storage:`).
+- **`aioboto3.Session` is already shared** — `app.clients.s3.default_session`, `lru_cache`d. It holds
+  no socket and no loop, so it *is* fork-safe. Do not build your own per task.
+- The generalisable rule (now in `CLAUDE.md`): **split a client into its "cache-like, loop-free" half
+  and its "connection-owning, loop-bound" half, and scope the halves differently.**
+- `details["reason"] == "rate_limited"` is the reschedule signal for S3 too, and **no S3 error
+  carries an `attempts` key** — botocore owns its own retry loop and does not report a count.
+- Keys come from `app.domain.storage.export_key`, which needs `now` **and** `unique` from you —
+  entropy is an ambient input, same rule as the clock. `content_type_for` and
+  `resolve_download_ttl` are there too; do not re-derive a content-type table.
+- `download_url` exists but **no route mounts it** — whether a presigned URL should leave the API is
+  an open decision, not an oversight.
 
 **For ANV-22 (ingest) — what ANV-18 deliberately left you:**
 - You receive `IntradaySeries` carrying `timezone` (e.g. `"US/Eastern"`) and a tuple of

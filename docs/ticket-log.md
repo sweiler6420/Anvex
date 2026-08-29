@@ -919,3 +919,55 @@ whichever the vendor happened to list first.
 **One correction to a carry-over:** NewsAPI's `maximumResultsReached` is mapped to `client_error`,
 **not** `rate_limited` — it means the requested page is past the plan's hard ceiling and will be
 refused at any hour, so rescheduling it would be an infinite loop rather than a retry.
+
+### ANV-20 — Done
+Commit `1821dd1`. **Verified independently:** `2228 passed / 299 skipped` with Docker stopped,
+ruff check and format clean across 161 files, and **the S3 tier genuinely executes — 29 tests
+against real MinIO**, confirmed by running `-m s3` myself.
+
+**The security finding that justifies the whole pre-flight.** S3 has real local defaults, so a
+"not configured" check looks like ceremony. It is not: an aioboto3 client built with no explicit
+credentials falls back to **botocore's default credential chain**, so a blank
+`S3_SECRET_ACCESS_KEY` would not fail — it would authenticate as whatever real AWS identity happened
+to be lying around on the host. Credentials are now always passed explicitly and a blank one raises
+before any client is constructed. *I verified this directly: blank credentials return
+`{"reason": "not_configured", "setting": "S3_ACCESS_KEY_ID"}` with zero SDK calls.*
+
+**A separate `S3Failure` enum, sharing the vocabulary but not the type.** `Failure` is HTTP-shaped,
+and forced onto S3 it collapses exactly the distinctions a caller acts on — missing key, missing
+bucket and rejected signature are 404/404/403 and would all read `client_error`. But the four
+members that mean the same thing spell their **values identically**, so `details["reason"]` stays one
+vocabulary across `app/clients/` and only the five S3-only members have to be learned. (`StrEnum`
+cannot be extended anyway, so a shared enum was never the cheap option.)
+
+**Two findings from actually running against MinIO rather than mocking it:**
+- botocore's default `auto` addressing builds `http://bucket.localhost:9000`, which resolves
+  nowhere. Path-style is pinned whenever a custom endpoint is set, and left `auto` when it is `None`
+  so AWS virtual-host addressing still applies in production.
+- A **HEAD cannot report `bucket_not_found`** — HEAD has no body, so botocore synthesises `"404"`
+  from the status line (AWS documents the same). `object_exists` therefore returns `False` for a
+  missing bucket. That is documented on the method and **asserted**, not assumed; put/get report it
+  truthfully.
+
+**Client lifetime: answered, not deferred again — and the answer splits the object.** A per-request
+client stays, because an aiobotocore client owns an aiohttp connector bound to the loop that made
+it: a lifespan-created client would be bound to a closed loop by the time a Celery task's own
+`asyncio.run` picked it up, and a prefork worker forking on a live socket is corruption rather than
+a loud failure. But `aioboto3.Session` — botocore's service-model loader cache — holds no socket and
+no loop, so it is safe across requests, loops **and** a `fork`. It is now an `lru_cache`d
+process-wide singleton while the client stays per-request, which removes the measurable cost ANV-19
+had accepted.
+
+**`export_key` takes its uniqueness token as a required argument**, for the same reason it takes
+`now`: a `uuid4()` inside would make output depend on something the function was not given, and §3's
+"no I/O of any kind" covers entropy as surely as a clock. The payoff is that tests assert whole
+keys rather than regexes. Content types come from an explicit table, not `mimetypes` — on Windows
+that reads the registry and resolves `.csv` differently per host.
+
+`StorageService` takes **no session** (nothing is persisted — a stated deviation from the standard
+service shape), gates every use case on the owner encoded in the key with **no I/O at all**, and
+translates exactly one client failure (`object_not_found` → `NotFoundError`); every other reason
+stays a 502, because those genuinely are "we are up, the upstream is not".
+
+Test isolation is a **throwaway bucket per test** rather than a rollback, since S3 has no
+transaction — so the tier does not depend on `minio-init` and leaves nothing in the dev bucket.
