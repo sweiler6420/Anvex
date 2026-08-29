@@ -60,7 +60,8 @@ modified. What each contributes to Anvex:
 | ANV-8 | Pydantic schemas | **Done** |
 | ANV-9 | Repositories | **Done** — *E2 Data layer complete* |
 | ANV-10 | Security utilities and pure token domain | **Done** |
-| ANV-11 | Auth service, dependencies and routes | Next |
+| ANV-11 | Auth service, dependencies and routes | **Done** |
+| ANV-42 | Drop passlib, hash with bcrypt directly | Next *(inserted — Stephen's call)* |
 | ANV-12 … ANV-41 | see `backlog.md` | Not started |
 
 ### ANV-1 — Done
@@ -501,3 +502,61 @@ below.**
 6. New public error codes for the frontend: `invalid_token`, `token_expired`, `wrong_token_type`.
    The client should refresh on `token_expired` and log out on the other two. No new
    `ERROR_STATUS_CODES` entry is needed — all three inherit 401 through `UnauthorizedError`'s MRO.
+
+### ANV-11 — Done
+Commit `817f514`, 68 new tests (39 unit, 29 API), 100% coverage on everything new.
+**Verified independently:** `639 passed / 5 skipped` with `db-test` up, `452 passed / 192 skipped`
+with it stopped, ruff clean, and the refresh regression test passes.
+
+**Routes:** `POST /v1/auth/login` (form), `POST /v1/auth/refresh` (JSON body — query-string refresh
+is now a 422), `POST /v1/auth/recovery` → **202**. Handlers are one line of body each.
+
+**The regression this epic existed for**, verified live against real Postgres:
+```
+POST /v1/auth/refresh with an ACCESS token   → 401 wrong_token_type   (old API: 200 + fresh pair)
+POST /v1/auth/refresh with the REFRESH token → 200, both halves rotated
+```
+
+**Hardening beyond the ticket:** on the *unknown identifier* login path the service still verifies
+against a fixed decoy bcrypt digest, so a miss pays the same ~100 ms and response time is not an
+account-existence oracle. The two failure arms were confirmed byte-identical apart from
+`request_id`.
+
+**Recovery is honest.** There is no mail client in `app/clients/` and none was invented. It logs
+`auth.recovery_requested` with **`delivered=False`** and returns 202; the gap is an explicit
+`TODO(ANV-mail)`, and **a unit test asserts that TODO is still present** so it fails the moment real
+sending is wired in. Both branches return byte-identical responses — the old endpoint answered 404
+`"User not found with username: <x>"`, a plain enumeration oracle.
+
+**Corrected a bug in my own ticket text:** I specified `tokenUrl="v1/login"`, but the route is
+`/v1/auth/login`. Nothing validates `tokenUrl` — it only points Swagger's *Authorize* button — so
+that would have shipped a silently broken `/docs`. The agent used the real path and added
+`test_the_swagger_authorize_button_points_at_the_real_login_route` asserting
+`f"/{TOKEN_URL}" == LOGIN_URL` so it cannot drift.
+
+**The pattern every later resource copies** (now in `CLAUDE.md` §3):
+1. `XService(session, settings, *, xs: XRepo = x_repo)` — the keyword repo default is the seam that
+   lets the unit tier use fakes and stay green with Docker stopped.
+2. One `get_x_service` per resource in `app/deps/x.py`, plus an `XServiceDep` alias. **One seam
+   only**; API tests override exactly that.
+3. Clock read **once** at the service (asserted per method by a `CountingClock` — `clock.reads == 1`);
+   `SecretStr` unwrapped only there.
+4. Handlers: one service call, one schema, no `try`/`if`. Router owns its `prefix`/`tags`.
+5. Shared fakes live in `tests/helpers.py` (`FakeUserRepo`, `make_user`, …) — add beside them, do
+   not start a parallel set.
+
+An AST test proves `HTTPException` never appears in the service module and that every `raise` names
+an `AnvexError` subclass.
+
+**Stale image, resolved.** The compose `api` image predated ANV-8 and lacked `pydantic[email]`, so
+the container booted to `ImportError: email-validator is not installed`. The agent could not rebuild
+— `docker compose build api` failed on `lookup auth.docker.io: no such host`. That turned out to be
+**intermittent DNS inside the Docker daemon, not a network outage**: the host resolved
+`auth.docker.io` fine (HTTP 200) at the same moment the daemon could not. A retry of
+`docker compose build api` succeeded, and the stack now comes up healthy with `/health` and
+`/health/ready` both 200 in-container and all five routes in the OpenAPI document.
+
+**Rule of thumb for later tickets:** if a Docker pull or build fails with `no such host`, retry
+before concluding the environment is offline. All base images (`python:3.12-slim-bookworm`,
+`ghcr.io/astral-sh/uv`, `postgres:16-alpine`, `redis:7-alpine`, **`node:22-alpine`**) are already
+cached locally, so builds mostly need PyPI/npm rather than Docker Hub.
