@@ -55,8 +55,9 @@ modified. What each contributes to Anvex:
 | ANV-3 | Async database layer and Alembic | **Done** |
 | ANV-4 | App factory, middleware and error contract | **Done** |
 | ANV-5 | Docker Compose stack and backend Dockerfile | **Done** |
-| ANV-6 | Pytest harness | Next |
-| ANV-7 … ANV-41 | see `backlog.md` | Not started |
+| ANV-6 | Pytest harness | **Done** — *E1 Foundation complete* |
+| ANV-7 | Models and initial migration | Next |
+| ANV-8 … ANV-41 | see `backlog.md` | Not started |
 
 ### ANV-1 — Done
 Commits `0ccc0df`, `9ae4224` on `main`.
@@ -225,3 +226,56 @@ bind successfully and the host client silently reaches the wrong server. Hence `
 - **Do not default the test database to port 5432.** See above.
 - The opt-in pattern is established: `ANVEX_COMPOSE_TEST=1` gates Docker-dependent tests, and
   `CLAUDE.md` §6 now requires the default suite to run with the daemon stopped.
+
+### ANV-6 — Done · **E1 Foundation complete**
+Commit `b4fd642`, 16 files. **Verified independently, both directions:**
+`177 passed / 5 skipped` with `db-test` up, `164 passed / 18 skipped` with it stopped, ruff clean.
+I also inspected the test database afterwards: the only surviving table was `alembic_version`
+holding `0001_bootstrap` — real migrations ran and **zero** test rows survived, so rollback
+isolation is genuine rather than asserted.
+
+**Test DSN — `Settings` was deliberately left alone.** `CLAUDE.md` §4 says of `db-test` that
+"nothing in `app/` ever knows it exists", so adding `postgres_test_*` fields would have shipped a
+test-only concern into the production config surface. Instead `tests/database.py` owns a
+`HarnessDatabaseSettings` reading the *same* root `.env` (§2 holds), borrowing
+`postgres_user`/`postgres_password` from the real `Settings`. `POSTGRES_TEST_PORT` uses
+`AliasChoices(..., "POSTGRES_TEST_HOST_PORT")` so the compose publication port is the single number
+to change — no drift trap.
+
+**Rollback mechanism.** `db_connection` opens a transaction that is never committed; `db_session`
+binds to it with `join_transaction_mode="create_savepoint"`, so a service's `session.commit()`
+releases and reopens a savepoint — defaults fire, constraints trip, rows stay visible — while the
+outer transaction is untouched and rolled back at teardown. The agent **mutation-tested** this:
+swapping the teardown `rollback()` for `commit()` fails 3 tests, including one asserting `5 == 0`.
+
+Two supporting decisions: `NullPool` on the session engine (an asyncpg connection belongs to the
+loop that opened it, so pooling across per-test loops is the classic hang), and `alembic upgrade
+head` rather than `create_all`, so tests exercise the schema production actually gets. The harness
+builds its Alembic `Config` **without** `alembic.ini`, because loading it calls `fileConfig()` which
+rips out pytest's `caplog` handler mid-session.
+
+**Fixtures every later ticket uses:** `settings`, `app`, `client`, `mock_http` (respx),
+`database_available`, `db_engine`, `db_connection`, **`db_session`** (the usual one), `db_app`,
+`db_client`, `throwaway_database_url`, `_deterministic_fakes` (autouse).
+`tests/helpers.py` adds `ERROR_BODY_KEYS`, `assert_error_envelope()`, `StubSession`,
+`override_session()`.
+
+**Skipping is fixture-driven, not directory-driven** — `pytest_collection_modifyitems` applies the
+`db` marker from `item.fixturenames`, so `-m "not db"` deselects the tier while a respx-only test
+living in `tests/integration/` still runs with Docker stopped.
+
+**Carried into ANV-7:**
+- Factory *infrastructure* exists (`tests/factories/base.py`: `Factory[ModelT]`, `@register` /
+  `factory_for`, `reset_randomness()` / `sequence()`, `fake`). ANV-7 adds one module per model
+  group, each a `@register`ed `Factory[Model]` implementing `defaults()`, re-exported from
+  `tests/factories/__init__.py`.
+- **Unique columns must use `self.sequence()`, never faker.** Seeding resets per test, so
+  `fake.email()` returns the same address twice within one test and trips the constraint.
+  `test_faker_alone_would_repeat_within_a_test` documents the trap.
+- A factory **flushes, never commits.**
+- Delete the temporary `scratch_table` fixture from `conftest.py` and rewrite
+  `tests/integration/test_harness.py` against a real model + factory.
+
+Also: `tests/integration/test_migrations.py` was rewritten onto `throwaway_database_url`. It had
+been using the *app* settings (`POSTGRES_HOST=db`), so it could never run from the host — it has
+now executed for the first time.
