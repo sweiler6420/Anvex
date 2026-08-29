@@ -976,6 +976,72 @@ it owns no URLs beyond `/v1/auth/refresh`.
   — is individually guarded: a browser with site data blocked can refuse any one of the three, and
   the app must still theme correctly and merely fail to persist.
 
+### Auth state and the token lifecycle (ANV-26)
+
+`providers/AuthProvider.jsx` + `hooks/useAuth.js` own the session; `features/auth/` owns the
+calls and the storage policy. The provider follows ANV-25's three-file split (`AuthContext.js`,
+`AuthProvider.jsx`, `hooks/useAuth.js`) rather than living under `features/auth/`, because §5's
+layout names `providers/` as the home of the auth context and `useAuth` is consumed by the
+router, the header and the login page alike — a cross-feature hook by definition.
+
+- **`useAuth()` → `{isAuthenticated, login, logout, restore}`, and deliberately no token.**
+  Nothing in the UI reads an access token: the transport reads it through the ANV-24 seam, which
+  is what keeps exactly one copy of it and lets the storage policy change without touching a
+  component. The old `useAuth` returned `{auth, setAuth}`, so any component could overwrite the
+  whole session — which is how the token ended up copied into three places.
+- **Persist-login is a synchronous read, not a boot-time refresh.** `restore()` reads
+  `localStorage` and a stored refresh token means "provisionally signed in"; the answer is known
+  during the **first render**, so there is no boot-pending state and no route is ever gated on a
+  promise. The old `PersistLogin` awaited a refresh on every page load and covered the *entire*
+  route tree — public pages included — with a `"Loading..."` div until it settled. An explicit
+  boot refresh is worse than letting the first protected call drive it: ANV-24's interceptor
+  already refreshes and replays a 401 `unauthorized` (which is exactly what a reload produces),
+  a boot call costs a round trip on loads that never need a token, it *spends a rotation* to
+  learn nothing, and it fails while the user is reading a public page instead of when they ask
+  for something. The accepted cost is stated rather than discovered: `isAuthenticated` is
+  **provisional** until a protected call succeeds. **A page-load "am I signed in" question is
+  answered from storage; a page-load "is my session still good" question is not asked.**
+- **The redirect seam is the `onSignOut({reason})` prop, not the router and not the transport.**
+  `lib/api` never navigates (that is what makes the refresh path testable outside React), so the
+  navigation lands on a callback the root passes in — a prop, so the store stays mountable
+  without a router, and so a test asserts the redirect without one. It carries a `reason`
+  (`SIGN_OUT_LOGOUT` / `SIGN_OUT_SESSION_EXPIRED`) because a voluntary sign-out and an expired
+  session want different destinations, and it fires **at most once per session**: several
+  requests discovering one dead session must not become several navigations racing each other.
+- **A provider that installs a global seam installs it during *render*, not only in an effect.**
+  React runs effects bottom-up, so every descendant's mount effect — including a
+  `RouterProvider`'s initial route load — fires *before* the provider's own. An effect-only
+  install leaves a window in which a child issues a protected request against the anonymous
+  default store: no header, a 401, nothing to refresh with, and a spurious sign-out on the first
+  paint after a reload. **A `useRef` guard does not make a render-phase side effect happen once**
+  — StrictMode re-invokes the render with a *fresh set of hooks*, so the second pass installs a
+  second store and leaves the install unbalanced after unmount. The guard therefore lives in a
+  module-level variable that **replaces rather than stacks** (uninstall the previous, then
+  install), with the returned cleanup checking it still owns the slot — the same shape as
+  `client.js`'s `refreshInFlight`. The effect keeps the uninstall and re-installs after
+  StrictMode's simulated unmount, which runs the cleanup without re-rendering.
+- **`features/auth/authStorage.js` is the only module in the repo that writes an auth value to
+  browser storage**, and that is what makes the policy auditable: there is no `writeAccessToken`
+  and nowhere else that could define one, and `AUTH_STORAGE_KEYS` is the complete list of what
+  auth persists. The tests assert on the **contents** of `localStorage` — every key, and no value
+  containing the access token — because "we never offered an API to store it" is a far weaker
+  claim than "after a login and a rotation, nothing in storage is the token".
+- **"Remember me" persists the username and nothing else.** The old `Login.jsx` wrote
+  `localStorage.setItem("pass", JSON.stringify(password))` — a plaintext credential with no
+  expiry, re-read into the password field on every visit. The primitives live in `authStorage.js`
+  (so the audit surface stays complete) but **the login page owns the checkbox**: the auth store
+  never calls them, because a form affordance is not part of a session. Logging out does *not*
+  forget the username.
+- **A rejected promise must not escape `act()` in a test.** React's acting depth is left
+  unbalanced and the *next* test's `render()` silently stops flushing, so the failure surfaces as
+  a null context in an unrelated test. Catch inside the scope
+  (`await act(async () => { err = await p.catch((e) => e) })`) and assert afterwards.
+- **Spy on `Storage.prototype`, never on `window.localStorage`.** jsdom's storage object is a
+  Proxy whose `defineProperty` trap stores a *value* under the given key, so
+  `vi.spyOn(window.localStorage, 'getItem')` installs an item called `"getItem"`, leaves the real
+  method in place, and gives a mock that never fires — a storage-failure test that passes for the
+  wrong reason. Seed a value first, too, or the assertion holds vacuously.
+
 ### Frontend test harness (ANV-23)
 
 The mirror of §6's backend rules: **extend the one setup file and the one MSW server; never start a
