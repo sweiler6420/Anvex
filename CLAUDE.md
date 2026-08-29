@@ -949,6 +949,33 @@ it owns no URLs beyond `/v1/auth/refresh`.
   and import `authApi`; there is deliberately no `lib/api/stocks.js`, which would collect every
   feature's URLs in one shared module and undo the feature-first rule on the second consumer.
 
+### Providers, contexts and hooks (ANV-25)
+
+- **A provider is three files, and the split is mechanical**: `providers/XContext.js` (the
+  `createContext` call and nothing else), `providers/XProvider.jsx` (the component, and at most a
+  *string-literal* constant beside it), `hooks/useX.js` (the consumer). A `.jsx` file that exports
+  both a component and a non-literal constant loses React Fast Refresh — `react-refresh/
+  only-export-components` says so — and a hook in `@hooks` must be able to reach the context without
+  importing the component. **The context defaults to `null` and the hook throws** naming the missing
+  provider; the old app's "helpful" defaults (a bare string, a `console.error` stub) turned a missing
+  provider into a component that half-works somewhere else entirely.
+- **A provider that owns a timer owns its handle.** Keep it in a `useRef`, cancel it *before*
+  replacing it, and cancel it in the effect cleanup. `setTimeout` with the handle dropped is two
+  bugs, not one loose end: the previous timer fires against the *new* state (a fresh error cleared
+  early by a stale one), and one fires after unmount. Prove both with fake timers —
+  `vi.getTimerCount()` after a second set and after `unmount()` is the assertion that fails when the
+  fix is removed.
+- **Anything that reaches a UI error surface is normalised with `toApiError` first**, so a consumer
+  branches on `code` (§4's vocabulary), indexes `details` unconditionally and has a `requestId` for a
+  support line. A thrown `TypeError`, or a rejected string, becomes `unknown_error` rather than
+  crashing the surface that displays it. **`request_cancelled` is swallowed** — it is a component
+  unmounting — and swallowing means *changing nothing*, not clearing what is already on screen.
+- **Class-based dark mode reads `prefers-color-scheme` when nothing is stored**, and an explicit
+  stored choice always wins over the OS. Storage is read in a lazy `useState` initialiser, never at
+  module scope, and **every** access to `localStorage` — the property, `getItem` and `setItem` alike
+  — is individually guarded: a browser with site data blocked can refuse any one of the three, and
+  the app must still theme correctly and merely fail to persist.
+
 ### Frontend test harness (ANV-23)
 
 The mirror of §6's backend rules: **extend the one setup file and the one MSW server; never start a
