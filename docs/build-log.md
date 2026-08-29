@@ -83,10 +83,11 @@ modified. What each contributes to Anvex:
 | ANV-24 | API client layer | **Done** |
 | ANV-25 | Theme and error providers | **Done** |
 | ANV-26 | Auth state and token lifecycle | **Done** |
-| ANV-27 | TanStack Router and route guards | Next |
-| ANV-28 … ANV-41 | see `backlog.md` | Not started |
+| ANV-27 | TanStack Router and route guards | **Done** |
+| ANV-28 | Layout, header and dark-mode switcher | Next |
+| ANV-29 … ANV-41 | see `backlog.md` | Not started |
 
-**122 frontend tests** passing in-container, lint clean.
+**178 frontend tests** passing in-container, lint clean. Backend: 2,811.
 
 **2,811 tests** passing with the full stack up (2,497 with Docker stopped — DB, S3 and broker tiers
 skip), 99% coverage. `ruff check` and `ruff format --check` clean across 176 files.
@@ -220,6 +221,32 @@ ANV-15's ownership sweep fails the suite if a new use case is added without isol
   Two of ANV-26's own storage-failure tests passed vacuously until it caught this.
 - **A rejection escaping `act()` unbalances React's acting depth**, which makes the *next* test's
   `render()` silently not flush — it presents as a null context in an unrelated test.
+
+**Routing (ANV-27) — what ANV-28→36 plug into:**
+- **`rootRoute.component` is `() => <Outlet />`** in `src/routes/root.jsx`. **ANV-28 wraps that
+  outlet in `Layout`/`Header`** — every route, public ones included, sits under it, matching the old
+  `<Route path="/" element={<Layout/>}>`.
+- **Every route is a `RoutePlaceholder`** with a `data-testid`. Replacing one is a single-line edit
+  in the route module (`component: () => <LoginPage />`). `NotFound.jsx` is a **real** page and can
+  stay.
+- **Links import from `@routes/paths`** (`HOME_ROUTE`, `LOGIN_ROUTE`, …) — nothing hardcodes a URL —
+  and use TanStack's `<Link to={...}>`.
+- **ANV-29's login page contains no navigation code at all.** A successful login flips
+  `isAuthenticated`, `App` invalidates the router, and `/login`'s own guard performs the bounce —
+  so the guard is both halves of the redirect round-trip. (The old app hardcoded `/research` in
+  `Login.jsx` while `RequireAuth` separately remembered somewhere else.)
+- **`redirect` search params are sanitised at the route edge** by `sanitiseRedirect`. Only a
+  single-leading-`/` same-site path survives. **Do not read the raw param anywhere** —
+  `search.redirect` is either absent or safe, everywhere.
+- **Only a *gained* session invalidates the router.** A lost one must not: `router.navigate` is
+  async, and a simultaneous invalidation can still see the protected match and issue a competing
+  `/login?redirect=…` for a logout meant to land on plain `/login`. **`onSignOut` is the single
+  authority on where a sign-out goes.**
+- A logout button calling `useAuth().logout()` is what makes the `logout` branch reachable
+  end-to-end — **ANV-28 should add that end-to-end test when the button lands.**
+- `src/test/setup.js` now no-ops `window.scrollTo`; anything mounting a router inherits it.
+- **ANV-25's flash-of-light gap is ANV-28's:** the theme class is applied in an effect, so first
+  paint before React mounts shows the light default. Two-line blocking script in `index.html`.
 
 **API contract facts the UI must respect:**
 - **Prices are quoted JSON strings**, not numbers — `"1234.5678"`. That is what preserves the fourth

@@ -1276,3 +1276,62 @@ Verified non-vacuous: adding one `setItem('anvex.access_token', …)` fails 3 te
 
 **`login` rejects with an `ApiError` rather than raising through `useErrors`** — a bad password
 belongs beside the password field, not in a 10-second global banner.
+
+### ANV-27 — Done
+Commit `f4fdfc8`, 56 new tests (122 → **178**). **Verified independently:** 178 pass, lint clean.
+
+**It added an open-redirect guard nobody asked for, and it is the most valuable thing in the
+ticket.** `/login?redirect=https://evil.example` would have made our own login page an open redirect
+aimed at users *at the moment they are primed to type a password*. `sanitiseRedirect` admits only a
+single-leading-`/` same-site path. **I adversarially tested it myself:** all 15 hostile inputs
+blocked — `https://evil.example`, `//evil.example`, `/\evil.example` (browsers normalise the
+backslash), `javascript:`, `data:`, bare words, empty, `null`, and the `/login` self-loop that would
+bounce forever. Sanitising happens at the **route edge** via `validateSearch`, so `search.redirect`
+is either absent or safe everywhere and no consumer has to remember.
+
+**`redirect({href})` is unusable here** — its typedef documents it for *external* redirects and it
+infers `reloadDocument`, and **a full document reload would discard the in-memory access token**.
+Internal hrefs are split into `{to, search, hash}`.
+
+**The boot window does not exist, confirmed against the code.** `restore()` is a synchronous
+`readRefreshToken()` in a ref initialiser during the first render, and `isAuthenticated` is a lazy
+`useState` off that ref — so `context.auth.isAuthenticated` is a settled boolean the first time any
+`beforeLoad` runs. No `pendingComponent` anywhere. A test asserts the positive case *and* that
+`/login` never appeared on the way.
+
+**Guards are one line** (`beforeLoad: requireAuth`), and the difference from the old `RequireAuth` is
+substantive: that was a route *element* — it rendered, then returned `<Navigate>`, so the protected
+branch was **entered before the decision was made** (loader ran, component mounted, effects fired a
+protected request, and a second render unwound it). `beforeLoad` runs while the navigation resolves,
+so a refusal renders nothing and requests nothing.
+
+**Unknown path is a 404 page, not a bounce to `/`.** A silent redirect makes a broken link
+indistinguishable from a working one, loses the wrong URL from the address bar, and pushes a history
+entry. It is public deliberately — guarding it would make "sign in first" versus "not found" an
+oracle for which paths exist.
+
+**Only a *gained* session invalidates the router.** A lost one must not: `router.navigate` is async,
+and a simultaneous invalidation can still see the protected match and issue a competing
+`/login?redirect=…` for a logout that is supposed to land on plain `/login`.
+
+**Seven mutations, each applied and the full suite re-run**: removing the guards fails 11 tests;
+dropping the `redirect` param fails 7; ignoring it on the bounce fails 5; no `/login` guard fails 8;
+swapping `signOutNavigation`'s arms fails 4; never invalidating on a gained session fails 3;
+**accepting any redirect string fails 10**. It also ran a probe that neutered `signOutNavigation`,
+which proved `App`'s handler supplies the param rather than the guard quietly re-firing — and that
+probe made it **rename a test that could not discriminate**, recording the real evidence in the
+comment.
+
+**Verification went beyond serving the shell.** A client-side router returns the same HTML for every
+path, so it loaded the **built production bundle** into a DOM in the container (node + jsdom, no dev
+server, no vitest) and reported where each start URL actually landed — `/research` anonymous →
+`/login?redirect=%2Fresearch`, signed-in → `/research`, `/login?redirect=%2Fportfolio` signed-in →
+`/portfolio`, `/nope` → "Page not found".
+
+**Correction to the ticket:** `react-router-dom` was never installed in Anvex — `package.json` had
+only `axios`, `react`, `react-dom`. The "replace v6" premise described `AverageInvestorWeb`. TanStack
+Router went in as the first and only router; nothing was removed.
+
+It also found empirically that the **root route needs `validateSearch: () => ({})`** — TanStack
+merges a parent match's search into its child's, and a route without it passes the raw query string
+through.
