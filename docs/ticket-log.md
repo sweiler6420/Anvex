@@ -1777,3 +1777,65 @@ scrolls.
 
 **The live render counted requests rather than trusting `onUnhandledRequest`** — XHR and `fetch`
 both stubbed to record and block: **zero attempts**, before and after driving the palette.
+
+### ANV-36 — Done · **the frontend is complete**
+Commit `9a2a131`, 20 files, 58 new tests (864 → **922**). **Verified independently:** 922 pass,
+lint clean.
+
+**The cold-load-with-refresh-token path had never run end to end before this ticket — and the reason
+is a genuine finding.** jsdom renders an *unmeasured* desktop, so no widget mounts, so **no page
+behind the guard ever issued a request.** There was nothing to 401. The securities panel — a plain,
+unmeasured surface that reads the API — is what makes the path reachable at all. Proved twice: in
+the suite with a **single-use** refresh mock that rotates and refuses a spent token, and in the
+**built production bundle** loaded into jsdom, which printed the exact sequence — guard admits on
+the first `beforeLoad` with no flash of `/login`, first protected call goes out with **no
+Authorization header**, 401, **one** refresh, replay with the rotated bearer, rotated pair stored.
+
+**A correction to the ticket:** the palette's chart row uses the **by-ticker** variant with a
+hardcoded `AAPL` — a chip cannot ask which security. Without the securities list, `/research` would
+have reached two of the three endpoints the ticket named and charted Apple forever.
+
+**`/portfolio` is an honest placeholder.** The one line of old copy — "Portfolio content goes
+here…" — is a note the author wrote to *themselves*, sitting where a sentence to the reader goes;
+the same category as the `<a href="#">` links ANV-32 refused to port. It names the absence instead
+and reaches no endpoint, proved by **counting requests** rather than trusting the absence of an
+import.
+
+**What a real portfolio page needs, verified rather than assumed:** a holdings model, transactions
+(realised P/L is derived, not stored), and — the actual blocker — **a quote source**. `StockOut` is
+`{stock_id, ticker_symbol, company, market, isin}` and carries **no price at all**; the only prices
+in the system are 5-minute candles, so "current value" today means "the last close we ingested" and
+a page must say so. ANV-34 already recorded what a hardcoded `$320` did to the old watchlist.
+
+**`initialWindows` is derived, not listed:** `RESEARCH_WINDOWS = WIDGET_PALETTE.filter(network ===
+true)`, the exact complement of `PUBLIC_WIDGET_PALETTE`. One flag read in both directions, with a
+test asserting the two **partition** the palette and that each window re-uses the palette row's
+*same* `content` element, so sizes and colours cannot drift. Read **once**, in a lazy initialiser —
+after first paint the arrangement is the user's, and a re-render must not reset it.
+
+**Persistence: it matters and was deliberately not built.** For a marketing demo a reset is correct;
+for a signed-in working surface it is a real cost. It needs serialising `{id,x,y,width,height}` and
+re-attaching `content` elements from the palette on the way back (a React element cannot be stored),
+**plus deciding where** — `localStorage` is per-browser and **the API has no endpoint for a user's
+layout**. That is a ticket, and it should land before anyone arranges a desktop they care about.
+
+**M17 is a finding, not just a survivor.** `definedOnly` cannot be killed because **axios drops the
+params itself** — verified, not assumed: `axios.getUri({params: {limit: undefined, offset: null,
+search: ''}})` is `/v1/stocks?search=`. It drops **`null` as well**, which makes ANV-34's comment in
+`features/widgets/api.js` ("`null` is kept, because an explicit `null` from a caller is a
+statement") **factually wrong**. The agent correctly declined to edit another ticket's file and
+recorded the correction; *the orchestrator has since fixed that comment, having reproduced the
+result.*
+
+**It fixed one of its own tests for not discriminating.** Its first cancellation test unmounted the
+panel and then asserted no alert — vacuous, because after unmount `queryByRole` is null either way.
+Rewritten to re-render with a new `limit` while the first request hangs, so the component is still
+mounted and an unswallowed `request_cancelled` would paint over a panel that is still loading.
+
+**Two housekeeping changes:** `RoutePlaceholder.jsx` is **deleted** — ANV-27 wrote it to be removed a
+line at a time, and these were the last two pages. And `GET /v1/stocks` joins the default MSW
+handlers answering an **empty page**, because `/research` is the default authenticated route so
+*every* signed-in journey now lands on a page that fetches it — five test files reached it without
+caring. An empty page is the emptiest truthful answer, so nothing can lean on it.
+
+18 mutations, 17 killed, both survivors genuine equivalent mutants recorded at the line.

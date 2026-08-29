@@ -92,12 +92,13 @@ modified. What each contributes to Anvex:
 | ANV-33 | Bin-packing window system | **Done** |
 | ANV-34 | Dashboard widgets | **Done** |
 | ANV-35 | Interactive desktop demo | **Done** |
-| ANV-36 | Research and Portfolio pages | Next — *closes the frontend* |
-| ANV-37 … ANV-41 | see `backlog.md` | Not started |
+| ANV-36 | Research and Portfolio pages | **Done** — *the frontend is complete* |
+| ANV-37 | Developer scripts | Next |
+| ANV-38 … ANV-41 | see `backlog.md` | Not started |
 | ANV-43 | Backend password strength policy | Backlog — *found by ANV-30, high priority* |
 
-**3,675 tests total** — **2,811 backend** (2,497 with Docker stopped, DB/S3/broker tiers skipping)
-and **864 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check`
+**3,733 tests total** — **2,811 backend** (2,497 with Docker stopped, DB/S3/broker tiers skipping)
+and **922 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check`
 and `eslint` all clean. Container tiers genuinely execute: **276 DB**, **29 S3**, **9 broker**.
 
 **Cosmetic issues in the ported marketing copy, flagged and deliberately NOT changed** (they are
@@ -354,19 +355,29 @@ such rule was ever written**. The four client-side rules are therefore not a mir
   an open decision, not an oversight.
 
 
-**For ANV-36 (Research and Portfolio) — the last frontend ticket:**
-- `import { InteractiveDesktop } from '@features/workspace'` and pass **`items={WIDGET_PALETTE}`
-  explicitly** — the default is the *public* subset and will silently give you three widgets.
-- Adding a widget is a row in `palette.jsx` and it **must declare `network: true|false`**, or the
-  suite fails and the widget never reaches the marketing page.
-- `InteractiveDesktop` holds its own `INITIAL_WINDOWS`. A research page wanting a different opening
-  arrangement (or persistence) needs an **`initialWindows` prop** — one line, not yet added because
-  nothing needed it.
-- `BinPackingLayout.addFromTemplate(template) → id | null` is on the imperative handle; `null` means
-  no room and **the caller owns the announcement**.
-- `dragPayload` is a module singleton — one drag at a time, by design. Relevant only if a page ever
-  mounts two desktops.
-- **jsdom reports every desktop unmeasured**, so any test asserting a window exists must thread
-  `useContainerSize` through as a named prop.
-- Both authenticated routes already exist as placeholders with `route-research` / `route-portfolio`
-  testids; replacing a `component:` line is the whole route change.
+**For the remaining ops tickets (ANV-37, 38, 39, 41) — from ANV-36:**
+- **ANV-37 (scripts):** frontend wrappers are `docker compose --profile frontend exec -T web …` and
+  nothing else. The **`-T` is required** — without it these hang in a non-TTY shell. A build script
+  must mount the **repo root**, not `frontend/`, because `envDir` reaches one level up. **Never set
+  `NODE_ENV`.** Backend: always `uv run python -m pytest`, never `uv run pytest`.
+- **ANV-38 (CI):** the frontend suite is **922 tests in ~13 s and needs no services** — `web` alone,
+  no db/redis/minio, so that job can be fast and independent of the backend's. Two traps: the build
+  must be asserted to emit **`jsxDEV: 0`** (an inherited `NODE_ENV=development` silently ships a
+  330 kB dev build with no warning), and the suite's **only** expected stderr is
+  `harness.test.jsx`'s deliberate unmocked-request line — a check that fails on any stderr must
+  allow that one. Also gate `ruff format --check`.
+- **ANV-39 (docs):** **`/portfolio` is a documented non-feature, not a bug** — say so, or the first
+  reader files it. Likewise: **the research desktop's window arrangement does not survive a
+  reload**, which is the highest-value follow-up on that page. The cosmetic issues in the ported
+  marketing and research copy are Stephen's and deliberate.
+- **ANV-41 (smoke):** ANV-36's live-render technique is the right shape and is cheap — jsdom over
+  `dist/`, a fake `XMLHttpRequest`, assertions on `data-testid`. **Two non-obvious requirements:**
+  jsdom 25 defines neither `fetch` nor `Response`, and TanStack Router's redirect machinery does an
+  `instanceof Response`, so Node's globals must be handed to the window or **every route load dies**
+  with `ReferenceError: Response is not defined`; and jsdom has no `ResizeObserver`, so the desktop
+  renders **empty** — a smoke test should assert the securities panel and the route testid, not a
+  window. **Against a live API, the cold-load path is the single most valuable thing to smoke:**
+  seed a refresh token, load `/research`, assert the securities list arrives — that exercises the
+  guard, the interceptor, the rotation and the API in one go.
+- **Known follow-ups worth tickets:** desktop layout persistence (needs an API endpoint — there is
+  none), and a holdings model + quote source before `/portfolio` can be real.

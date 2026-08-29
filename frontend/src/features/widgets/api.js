@@ -164,9 +164,16 @@ export async function moveWatchlistStock({ watchlistId, stockId, position, signa
 /**
  * Drop `undefined` keys so axios does not serialise `?limit=` for an argument nobody passed.
  *
- * `null` is kept: no parameter on these routes means "null" today, but an explicit `null`
- * from a caller is a statement and an absent key is not, and quietly turning one into the
- * other is how a default gets applied where an explicit value was intended.
+ * `null` is kept **by this filter** — but it does not survive anyway, and the first version of
+ * this comment was wrong to imply otherwise. ANV-36 checked rather than assuming:
+ * `axios.getUri({url, params: {limit: undefined, offset: null, search: ''}})` is
+ * `/v1/stocks?search=`, so axios drops `null` exactly as it drops `undefined`, and only the
+ * empty string survives. An explicit `null` from a caller therefore cannot mean anything
+ * different from omitting the key, whatever this function does with it.
+ *
+ * It is kept regardless, because the distinction costs nothing here and no route on this
+ * client takes a nullable query parameter. **If one ever does, the serialiser is the thing to
+ * fix, not this filter.**
  */
 function definedOnly(params) {
   return Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined))
