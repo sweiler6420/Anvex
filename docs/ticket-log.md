@@ -1730,3 +1730,50 @@ jsdom but real in a browser** (a repeating Enter keypress).
 
 Every test file's header states whether it proves real behaviour, real behaviour with a fabricated
 size, or wiring only.
+
+### ANV-35 — Done
+Commit `da1fa8b`, 38 new tests (826 → **864**). **Verified independently:** 864 pass, lint clean,
+and both claims about the old file confirmed.
+
+**The public/authenticated split is designed so both failure modes land safe.** Each palette row
+carries a required `network: true|false`, and the public list is `filter(i => i.network === false)`
+with `InteractiveDesktop` **defaulting to the public subset**. Three properties: the filter is an
+**opt-in**, so a sixth row that forgets the flag is *excluded* rather than admitted; a test asserts
+every row declares a **boolean**, so forgetting is not silent either; and the derived list is
+asserted a **proper subset**, so marking everything `false` cannot make "the public page is pure"
+vacuously true. `/research` opts in with `items={WIDGET_PALETTE}`.
+
+**The click-to-add button carries `draggable` and the drag handlers itself** — a form control inside
+a draggable ancestor **swallows the gesture** in several browsers, so adding the keyboard affordance
+naively would have silently removed the drag for the mouse users it exists for. Two tests fail if
+either half is removed. `onAdd` is optional, so without it `WindowMenu` renders exactly what ANV-33
+shipped — which is why every ANV-33 test stayed green unedited.
+
+**It overrode the ticket's "neither feature should need a single edit", correctly.** The
+*composition* needs none, but the two behaviour changes the ticket itself assigns do: click-to-add
+cannot live outside `WindowMenu`/`BinPackingLayout` (the grid is measured there and nowhere else),
+and the palette flag belongs on the palette. Both edits are strictly additive.
+
+**Bugs in the old `InteractiveDesktop`, confirmed:** `apiRef` was created, passed and **never read**
+(now what click-to-add uses); and **two of the three initial windows had no `content` at all** — the
+marketing page shipped two empty boxes and a `<div>` reading "Hello World". Also `minWidth: 5,
+minHeight: 4` on windows the collapse control can shrink to 2×2, and `font-neutral-500`, which is
+not a Tailwind class.
+
+**It found a bug in its own mutation driver.** A `filter(() => true)` mutation appeared to survive;
+the driver had replaced the first occurrence, which was **in a docstring**. Re-anchored, it kills 7
+tests. Three genuine equivalent mutants recorded at the line, plus one contract that is
+**unkillable from this surface** — replacing `onWindowsChange={setWindows}` with a no-op changes
+nothing visible, because `BinPackingLayout` renders from its own copy and only *tells* the owner.
+ANV-33 pins that one level down.
+
+**Measured bundle delta: +68.59 kB raw / +23.84 kB gzip** — and **ANV-34's prediction over-counted
+by ~17 kB**: the widgets alone cost +47.67 / +16.70, not +65.00 / +22.93. The entire window system
+adds only +3.6 kB raw beyond what ANV-34 predicted for the widgets by themselves.
+
+**One real overflow found and fixed:** `WindowMenu` is a non-wrapping flex row, so at phone widths
+the chips exceed the strip inside `overflow-hidden` and the last one was lost. The strip wrapper now
+scrolls.
+
+**The live render counted requests rather than trusting `onUnhandledRequest`** — XHR and `fetch`
+both stubbed to record and block: **zero attempts**, before and after driving the palette.
