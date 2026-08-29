@@ -1193,6 +1193,77 @@ navigation.
   let the nav and the guards disagree in a way the application cannot. `useAuth`/`useDarkMode`
   throw outside their providers by design (ANV-25), so this is a failure, not a warning.
 
+### A page, and the form pattern every page ticket copies (ANV-29)
+
+`features/<area>/components/<X>Page.jsx` is the page; the route module's only change is
+`component: () => <XPage />`. ANV-29 established the shape with `LoginPage`; **ANV-30 and
+ANV-31 copy it**, and a page that deviates is the one that is wrong.
+
+- **A page keeps its `RoutePlaceholder`'s `data-testid`** (`route-` + the placeholder's
+  lowercased title). Every routing test from ANV-27/28 asserts on it, so preserving it is
+  what makes "this ticket replaced a placeholder" a one-line diff rather than a sweep
+  through three test files.
+- **A form page is five parts in this order**: local `useState` for the fields (a half-typed
+  form is not application state); a **pure** `validate(...)` returning a `{field: message}`
+  map; one `await` on the feature's operation; `catch (err)` branching on **`err.code`**
+  and displaying `err.message`; and no navigation at all. Validation runs first and returns
+  early, so an invalid submit **never reaches the network** — and the test asserts the
+  operation was not called, not merely that a message appeared, because a form that showed
+  the message *and* submitted anyway passes the message-only assertion.
+- **`request_cancelled` is caught and changes nothing.** It is the component unmounting
+  (ANV-24/25), so it clears no error and shows none. It is the only `err.code` a form
+  branches on; everything else is one banner.
+- **A submit is idempotent while it is in flight** — an early `if (submitting) return` *and*
+  a `disabled` button, because the two fail differently (a keyboard Enter versus a double
+  click) and neither alone is a guard. `submitting` is deliberately **not** cleared on the
+  success path: the route guard is already unmounting the page, and re-enabling the button
+  during the bounce is a second submit waiting to happen.
+- **Message slots are rendered unconditionally and left empty**, one per field plus one for
+  the form, each `role="alert"` with a stable `useId`. A live region has to be in the
+  accessibility tree *before* its text arrives — inserting the region together with its text
+  is the case screen readers announce least reliably, and it is exactly what a
+  `{error && <p>…</p>}` does. Empty, the slot is invisible and occupies nothing.
+- **Every control is named, described and marked**: `htmlFor`/`id` on each label,
+  `aria-invalid` on a field that failed, `aria-describedby` pointing at that field's slot.
+  The old app's forms had **no `htmlFor` anywhere** — both login fields were announced as
+  "edit text, blank" — and put the per-field message in a second `<label>` associated with
+  nothing. `required` stays on the inputs (it is what tells assistive tech the field is
+  mandatory) alongside `noValidate` on the `<form>`, so the visible message is ours.
+- **An icon that is also a control is a `<button>`, never an `<svg onClick>`.** The old
+  password toggle hung `onClick` on an `aria-hidden` SVG: no tab stop, no role, unusable
+  from a keyboard. The accessible name says what pressing it *does* and changes with the
+  state ("Show password" ↔ "Hide password", ANV-28's rule for the theme switcher), with
+  `aria-pressed` for the state. **Test it with `focus()` + `{Enter}`, not `user.click`** —
+  `user.click` passes on a `<div role="button" tabIndex={0} onClick>` shim, and the keyboard
+  test is the one that does not (verified by mutation).
+- **A page contains no navigation code** (ANV-27), and the mutation that proves the test
+  cares: adding `navigate({to: DEFAULT_AUTHENTICATED_ROUTE})` after a successful login
+  fails the "lands where the `redirect` param says" test. In-app destinations are `<Link>`s;
+  the old pages used `<p onClick={() => navigate(...)}>`, which is neither focusable nor
+  keyboard-operable and (ANV-28) risks a document navigation that discards the access token.
+- **"Remember me" persists the username and the checkbox's state is *derived* from it.**
+  There is no third storage key: `readRememberedUsername() !== null` is the initial checked
+  state, ticking promises nothing until the credentials are known good, and **unticking
+  forgets immediately** — being forgotten must not require a successful sign-in. The proof
+  that no password is stored is an assertion on the **whole contents** of `localStorage`
+  after a real sign-in (ANV-26's technique), including the theme key, not on which API was
+  called.
+- **A hand-off between two pages is a module with a builder, a reader and one key**
+  (`features/auth/handoff.js`), carried in the router's location state — never in storage.
+  Two pages agreeing on a string literal fail *silently*: the form simply arrives empty,
+  which looks like a design decision. The reader is defensive (location state survives a
+  reload and a Back press, so it is user-reachable data) and fills a missing half with `''`,
+  so a `value=` never becomes `undefined` and switches the input to uncontrolled.
+  **Test trap:** `createBrowserHistory` **overwrites** an entry's whole state at startup when
+  it finds neither `key` nor `__TSR_key` on it, so a hand-made `window.history.replaceState`
+  fixture must include those; a real `navigate({state})` already carries them.
+- **A page test needs both harnesses, and one of them is not optional.** ANV-28's `renderAt`
+  (real router, stubbed `AuthContext`) covers validation, ARIA and the failure branches with
+  a `login` that a test can make reject or hang. But *where the user lands* and *what is in
+  `localStorage`* are invisible from inside the component, so those assertions mount the
+  whole `App` with the real store and MSW. A page ticket that only writes the first harness
+  has not tested the two things it is most likely to have got wrong.
+
 ### Frontend test harness (ANV-23)
 
 The mirror of §6's backend rules: **extend the one setup file and the one MSW server; never start a
