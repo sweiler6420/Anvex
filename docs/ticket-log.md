@@ -821,3 +821,46 @@ a checker that cannot fail proves nothing.
 unwrap a `SecretStr`. Holding the key in the client is the safer design, so the agent amended that
 sentence to name `app/clients/` as the one exception (unwrapped in the request builder, plaintext
 never stored) rather than silently violating it.
+
+### ANV-18 — Done
+Commit `46f8389`, 5 files, 100% coverage on `app/clients/alphavantage.py`.
+**Verified independently:** `1980 passed / 5 skipped` with `db-test` up, `1715 passed / 270 skipped`
+with it stopped, ruff clean. I also confirmed prices are annotated `Decimal` (never through
+`float`), there is no `round(` in the module, and `extended_hours` is not smuggled into the URL.
+
+**The model speaks the vendor's words, not Anvex's.** `IntradayCandle` has `open`/`high`/`low`/
+`close`, not `open_price`, and no `stock_id` — a test asserts it. Those renames were pure DB
+knowledge in the old ETL. `IntradaySeries` also carries `timezone`, because it is the only thing
+that says what a candle's `time` *means*; dropping it would force ANV-22 to hardcode the zone.
+
+**The client does not round, deliberately.** The old `round(..., 2)` existed to fit a
+`NUMERIC(8,2)` column that no longer exists (ANV-7 stores `NUMERIC(12,4)`). Rounding is lossy and
+irreversible, so a vendor client is the worst place for it — and the scale it would round *to* lives
+in `app/models/`, which the AST sweep forbids this layer from importing. **That is the sweep telling
+you whose rule it is.** Prices parse from the vendor's strings straight into `Decimal`, never through
+`float`.
+
+**The 200-that-means-failure detection has a subtle guard.** AlphaVantage signals a rate limit with a
+200 and a top-level `"Note"`/`"Information"` key. But a *healthy* payload carries `"1. Information"`
+**inside `Meta Data`** — so a naive `"Information" in payload` check would reject every good
+response. The check is top-level only, and there is a test for exactly that false positive.
+
+**It declined to add a base hook, correctly.** `_check_payload` would have had one caller, and its
+shape (return a `Failure`? raise? participate in the retry budget?) would be fixed by that single
+example. The repo's own rule is to generalise on the *second* caller. Instead it widened
+`BaseHTTPClient._error(attempts=None)` by three lines, so a body-detected failure reuses the base's
+message templates and is byte-identical to a transport-detected one — without fabricating an attempt
+count for a failure the retry loop had already succeeded past.
+
+**A real bug found in the old ETL:** `pd.to_numeric(errors="coerce")` turned an unparseable price
+into a silent `NaN` that then went **into the database**. Every one of those is now an
+`ExternalServiceError`, and `Decimal("NaN")`/`Decimal("Infinity")` are explicitly rejected because
+they parse without complaint.
+
+Also discarded deliberately: the 08:05–17:00 window and month selection (Anvex rules → ANV-22 — and
+for the same reason the client does *not* send `extended_hours=false`, which would smuggle that rule
+into the URL); `time.sleep(10)` between calls (the fan-out job's concern, and blocking in async would
+stop the worker); and `df.append()`, removed in pandas 2, so the old code would not run today anyway.
+
+All test payloads are **hand-built** from AlphaVantage's documented response shape — no captured
+traffic, no key configured, and `mock_http` refuses to let a request escape.

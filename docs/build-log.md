@@ -74,11 +74,12 @@ modified. What each contributes to Anvex:
 | ANV-15 | Watchlists — reorder domain, service and routes | **Done** |
 | ANV-16 | Politicians seed data, service and routes | **Done** — *E4 Core features complete* |
 | ANV-17 | Client base | **Done** |
-| ANV-18 | AlphaVantage client | Next |
-| ANV-19 … ANV-41 | see `backlog.md` | Not started |
+| ANV-18 | AlphaVantage client | **Done** |
+| ANV-19 | NewsAPI client, service and routes | Next |
+| ANV-20 … ANV-41 | see `backlog.md` | Not started |
 
-**1,895 tests** passing with `db-test` up (1,630 with it stopped, DB tier skipping), 93% coverage.
-`ruff check` and `ruff format --check` are both clean across all 140 files.
+**1,980 tests** passing with `db-test` up (1,715 with it stopped, DB tier skipping), 99% coverage.
+`ruff check` and `ruff format --check` are both clean across all 142 files.
 
 ---
 
@@ -86,6 +87,26 @@ modified. What each contributes to Anvex:
 
 Only what is still outstanding. Once a ticket consumes one of these, delete it — the full record
 stays in [`ticket-log.md`](./ticket-log.md).
+
+**For ANV-19 (NewsAPI) specifically:**
+- The subclass shape is unchanged. NewsAPI names its key `apiKey` in the query **and** accepts an
+  `X-Api-Key` header; both are covered by ANV-17's two-test redaction.
+- **If NewsAPI also needs a body-level failure check, that is the *second* caller** — the moment to
+  lift `_check_payload` onto the base. ANV-18 deliberately did not, because a hook with one caller
+  has its shape fixed by a single example. `BaseHTTPClient._error(attempts=None)` already exists to
+  raise through, so a body-detected failure is byte-identical to a transport-detected one.
+
+**For ANV-22 (ingest) — what ANV-18 deliberately left you:**
+- You receive `IntradaySeries` carrying `timezone` (e.g. `"US/Eastern"`) and a tuple of
+  `IntradayCandle` in the vendor's order (**newest first**).
+- **All of this is yours, none of it is done:** the 08:05–17:00 filter (use `series.timezone`, do
+  **not** hardcode a zone); quantising `Decimal` prices to the model's scale — the client hands you
+  full vendor precision on purpose; mapping `open/high/low/close` → `open_price/…` and attaching
+  `stock_id`; which months to fetch; and the 5-calls-per-minute pacing across the fan-out. **The
+  client will never sleep for you** — a test asserts `sleeps == []` across two calls.
+- An empty series is a legitimate `()`, not an error — decide what "nothing traded" means.
+- `ExternalServiceError` with `details["reason"] == "rate_limited"` is your reschedule signal, and
+  it carries **no `attempts` key** when it came from a 200 body.
 
 **For ANV-18 (AlphaVantage) — and every client after it:**
 - Subclass `BaseHTTPClient`: set `vendor` and `base_url`, keep the key as a **`SecretStr` on the
