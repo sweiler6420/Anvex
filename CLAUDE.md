@@ -89,6 +89,62 @@ return a schema. Versioned as `app/api/v1/<resource>.py`, aggregated by `app/api
 - A client knows **nothing** about Anvex — no DB, no repos, no Anvex domain concepts, no
   `stock_id`. It takes primitives and gives back the vendor's data.
 - All clients subclass the shared base in `app/clients/base.py` for timeout/retry/logging behavior.
+- **`base.py` is the shape of the layer, and a subclass is small on purpose** (ANV-17). A client
+  sets two class attributes (`vendor`, `base_url`), overrides `auth_params()` / `auth_headers()`
+  if the vendor wants a credential, and writes one `async` method per vendor operation that calls
+  `self.get_json(...)` and returns a typed model. It contains no `try`, no status-code check, no
+  retry loop and no logging — each of those is a decision three vendors would otherwise make three
+  subtly different ways. **If a vendor module has a `while` in it, the base is missing a feature.**
+  `BaseHTTPClient` is the *HTTP* foundation; a vendor reached through an SDK rather than a URL
+  (ANV-20's `aioboto3` S3 client) shares the error and logging contract below but not the
+  transport.
+- **`ExternalServiceError` is the layer's one exit.** Unreachable host, timeout, 5xx, 4xx, rate
+  limit, a body that is not JSON — all of them leave `app/clients/` as that exception (→ 502) and
+  nothing else does. A raw `httpx` exception escaping would make every service import `httpx`; a
+  `JSONDecodeError` escaping would be a 500 for something the client already understood. `details`
+  carries `service`, `reason`, `attempts` and — where they exist — `status_code` and `retry_after`,
+  and **never** the vendor's body or URL: §4 makes the error body a public contract, and forwarding
+  upstream output through it turns an internal detail into an API. This is deliberately *unlike*
+  `app/data/`, which raises a plain `ValueError`, because a client failure is always inside a
+  request or a job and already has a status code waiting for it.
+- **4xx is never retried; 5xx and transport errors (timeouts included) are.** Retrying a 401 turns
+  one permanent failure into three. **429 is its own case** — a "not now" rather than a "never" —
+  so it gets a separate, shorter attempt budget, and a `Retry-After` is honoured *but capped*: a
+  vendor asking for 60 seconds is asking for longer than a request path may be held open, so the
+  call fails immediately with `retry_after` in `details` and the caller reschedules. Every wait is
+  `await`ed (`asyncio.sleep`) and jittered downward, and the loop is bounded twice — by attempt
+  count *and* by a wall-clock budget, because attempts alone do not stop three slow-but-not-dead
+  responses adding up. A blocking `time.sleep` anywhere in the package fails the layering test.
+  A malformed 200 body is *not* retried: a vendor answering with HTML is broken, not blipping.
+- **Timeouts are four named numbers, never one.** A bare `timeout=5` sets connect, read, write and
+  pool at once and hides which one was meant. Connect is short (a handshake is fast or the host is
+  gone); read is generous (a vendor is allowed to think about a query).
+- **A credential is unwrapped in the request builder and nowhere else, and no URL is ever logged
+  raw.** The subclass holds the `SecretStr` and returns it from `auth_params()`/`auth_headers()`;
+  the base unwraps it while building one request and lets the plaintext go out of scope with the
+  call. Logging goes through `redact_url`, which blanks any query value whose *name* looks like a
+  credential **and** any value that *is* one of the call's secrets — two independent tests, because
+  a vendor that names its key `u` defeats the first and a key we have not enumerated defeats the
+  second. Bodies and headers are never logged at all. Redaction is by construction, not by
+  remembering: a subclass cannot log a raw URL because it never gets one.
+- **Redirects are not followed.** Following one would resend the credential-bearing URL to whatever
+  host the vendor named, so a 3xx is a failure here, not a hop.
+- **One `httpx.AsyncClient` per client instance, created lazily and closed explicitly.** Pooling
+  connections, DNS and TLS is why the base owns the client instead of each call opening one.
+  Closing is final — a request after `aclose()` raises, mirroring httpx's own refusal to reopen,
+  because silently reconnecting hides a lifecycle bug in something meant to be long-lived.
+- **The layering is enforced by an AST sweep, not by this paragraph.**
+  `tests/unit/test_clients_base.py::TestTheLayerStaysInItsLane` parses every module in the package
+  and fails on an import of `sqlalchemy`, `requests`, `app.repos`, `app.db`, `app.models`,
+  `app.services`, `app.schemas`, `app.api` or `app.jobs`; on any `app.` import outside the
+  allow-list (`app.clients.*`, `app.domain.errors`, `app.settings`); on a `time.sleep` call; and on
+  a bare `print`. **`app/schemas/` is forbidden on purpose** — it is the API's public shape and a
+  vendor does not share it, so a vendor payload is parsed into a model *defined in the client
+  module*. A client wanting a normalised ticker is asking the wrong layer; §4 makes that the
+  service's job.
+- **Proactive quota throttling is not a client concern.** Honouring a `Retry-After` is; sleeping to
+  stay under five-calls-a-minute is a scheduling decision for the job that fans out, because a
+  request path cannot block to honour it.
 - **Rule of thumb: if it makes a network call to something we do not own, it is a client.**
 
 ### `app/data/` — static and seed data
@@ -254,7 +310,11 @@ what lets a unit test pass an in-memory fake and never reach Postgres. One `asyn
 use case, keyword-only arguments, returning a **schema** (or a model another service consumes);
 never an ORM row straight to the API. It raises `app.domain.errors` exceptions and owns the
 `commit()`. It is also the **only** layer allowed to read a clock (`datetime.now(UTC)`, once at
-the top of a method, passed down) or to unwrap a `SecretStr` (`.get_secret_value()`).
+the top of a method, passed down). The same held for unwrapping a `SecretStr`
+(`.get_secret_value()`) until ANV-17, which added the one documented exception: `app/clients/`
+unwraps a vendor credential *inside its request builder*, keeps it in that stack frame and never
+stores the plaintext — see the client section above for why a client, not its caller, has to be
+the layer that holds the key.
 
 **A dependency** wires and nothing else. `app/deps/x.py` exports a `get_x_service` factory that
 resolves `get_session` + `get_settings_dep` and constructs the service, plus an
