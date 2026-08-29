@@ -293,6 +293,25 @@ position math, indicator calculation, token claim construction, ingest windowing
   third spelling of one record, beside the vendor model and the `XOut` schema. The test for such a
   module is written against a three-line stub: if it can only be written by importing
   `app.clients`, the rule is in the wrong layer.
+- **A rule that has to fit a *column* imports the column's constant from `app/models/`.** That is
+  the one `app.` import this layer takes beyond `app.domain.*` / `app.schemas.*`, and it is §4's
+  "never retype a column's cap" rule applied to a rule rather than to a validator: ANV-22's
+  `quantise_price` reaches for `PRICE_PRECISION`/`PRICE_SCALE` so widening `NUMERIC(12,4)` cannot
+  leave a stale `4` behind. It is also exactly the import `app/clients/`'s AST sweep forbids —
+  which is *why* quantising is a domain rule and not a parser's (ANV-18 → ANV-22). Round
+  `ROUND_HALF_UP`, not Python's banker's default, so the value written equals the value Postgres
+  would have written itself and a `SELECT` after the `INSERT` agrees with the job that wrote it.
+  A value the column cannot hold is a `ValueError` here, not a `DataError` halfway through a
+  statement that names a column but not a row.
+- **A rule about a time of day names the zone it is expressed in, and converts into it.** A
+  wall-clock time carries no zone, so comparing one against a window means nothing until somebody
+  says whose clock. Declare the window in a named zone constant, take the *quoted* zone as an
+  argument, and convert — never `datetime.combine` without a `tzinfo` (it resolves in whatever zone
+  the machine sits in) and never a hardcoded zone (that is a vendor metadata field being thrown
+  away). An unrecognised zone name is a `ValueError`, not a fallback: guessing puts every row of the
+  run in the wrong bucket with nothing in the data to say so afterwards. `zoneinfo` is a lookup
+  table rather than an ambient input, so it does not offend the purity rule — the answer is the same
+  on every machine, which is the property that rule exists to protect.
 - **Rule of thumb: if a rule would still be true on paper without a computer, it belongs in domain.**
 
 ### `app/jobs/` — Celery tasks
@@ -369,6 +388,23 @@ lives in a task body. Tasks are idempotent and safe to retry.
   and a slow task is handed to a *second* worker while the first is still running it. Both are
   constants in `app/jobs/celery_app.py` and a test asserts the ordering, because the failure is
   invisible until a job gets slow.
+- **A metered vendor is paced by a `countdown` on a message, never by a sleep, and the unit of
+  work is one call.** ANV-22's rule for any fan-out against a quota. The beat entry is a
+  *dispatcher* that makes no vendor call at all: it asks one service for a plan and publishes one
+  task per call with `countdown = index * spacing`. Three things follow and each is load-bearing.
+  **One call per task**, so the spacing paces calls rather than batches — a task covering several
+  calls could only space them internally, by waiting. **Nothing waits**: `time.sleep` holds a
+  prefork child, and `await asyncio.sleep` is not the fix it looks like, because a Celery task owns
+  its process for its whole duration and `run_async` gives it a loop with nothing else on it — a
+  countdown costs nothing because the work does not exist yet. **The dispatched messages carry an
+  `expires` too**, not just the beat entry they came from: a target nobody consumed is superseded by
+  the next fan-out rather than run an hour late. The costs are stated rather than discovered: this
+  is *pacing*, not a rate limiter (nothing counts calls, so two overlapping fan-outs double the
+  rate — hence `max_calls × spacing` must stay inside the beat interval, and a test asserts it); a
+  countdown is a *reservation* a worker holds in memory, so the fan-out is bounded rather than
+  unbounded; and the plan is stale by the time its tail runs, so each task re-reads what it needs
+  rather than trusting the plan. A real limiter (a shared token bucket) is a distributed lock's
+  worth of machinery — reach for it when a job runs often enough that overlap is normal, not before.
 - **Every beat entry carries an `expires` shorter than its interval.** Beat publishes whether or not
   anything is consuming, so a queue nobody is draining collects one message per tick and bringing
   the workers back replays hours of stale ticks at once. With an expiry there is at most one pending

@@ -37,6 +37,20 @@ Anvex rule, so it belongs beside the other ingest rules in ANV-22. Prices are pa
 vendor's **strings** straight into :class:`~decimal.Decimal`, never through ``float``, so
 nothing is lost on the way in and ANV-22 has the full value to quantise from.
 
+No key, no request
+------------------
+
+``ALPHAVANTAGE_API_KEY`` defaults to a blank ``SecretStr``, so "not configured" is the state
+of every fresh clone. :meth:`AlphaVantageClient._require_key` refuses before the request and
+names the setting, per ``CLAUDE.md`` §3. **This was added by ANV-22, not by ANV-18**, and the
+cost of its absence is worth recording: a keyless request is not refused by the vendor with
+anything distinctive — AlphaVantage answers ``apikey=`` with a ``200`` and an
+``"Error Message"``, which the parser below correctly reads as
+:attr:`~app.clients.base.Failure.CLIENT_ERROR`. That is byte-identical to the answer for a
+symbol that does not exist. A scheduled ingest fan-out would therefore spend one real round
+trip per ticker per month, forever, reporting a missing environment variable as a bad
+roster.
+
 The trap: a rate limit that arrives as a 200
 --------------------------------------------
 
@@ -70,6 +84,7 @@ from typing import Any, ClassVar, Final
 from pydantic import BaseModel, ConfigDict, SecretStr
 
 from app.clients.base import BaseHTTPClient, Failure
+from app.domain.errors import ExternalServiceError
 from app.settings import Settings
 
 # ---------------------------------------------------------------------------------------
@@ -102,6 +117,14 @@ RATE_LIMIT_KEYS: Final[tuple[str, ...]] = ("Note", "Information")
 #: Top-level key meaning the vendor refused the request outright (unknown symbol, bad
 #: parameter). A 400 wearing a 200.
 ERROR_MESSAGE_KEY: Final[str] = "Error Message"
+
+#: ``reason`` for the one failure that is Anvex's fault rather than the vendor's.
+NOT_CONFIGURED: Final[str] = "not_configured"
+
+#: The settings field an operator has to fill in. Named in ``details`` so the 502 is
+#: actionable from the response body alone — it is a key *name* already committed to
+#: ``.env.example``, never a value.
+API_KEY_SETTING: Final[str] = "ALPHAVANTAGE_API_KEY"
 
 #: The vendor's per-candle field names, mapped to this module's model fields. This mapping
 #: *is* the thing worth porting from the old ETL — the numeric prefixes exist so the vendor's
@@ -221,6 +244,16 @@ class AlphaVantageClient(BaseHTTPClient):
     def auth_params(self) -> Mapping[str, SecretStr | str]:
         return {"apikey": self._api_key}
 
+    @property
+    def is_configured(self) -> bool:
+        """Whether a key has been supplied at all.
+
+        Public because a *caller* may reasonably want to answer "is this feature available
+        here" without provoking a failure — but reading it is not a substitute for handling
+        the error, since a key can be present and still be rejected.
+        """
+        return bool(self._api_key.get_secret_value().strip())
+
     async def fetch_intraday(
         self,
         symbol: str,
@@ -241,6 +274,7 @@ class AlphaVantageClient(BaseHTTPClient):
         :raises ExternalServiceError: for every failure, including the two that arrive as a
             perfectly valid ``200``.
         """
+        self._require_key()
         params: dict[str, str] = {
             "function": INTRADAY_FUNCTION,
             "symbol": symbol,
@@ -259,6 +293,29 @@ class AlphaVantageClient(BaseHTTPClient):
     # wraps the *request*, and the base owns it. Turning the string `"abc"` into a Decimal
     # has no other spelling, and the alternative — pandas' `errors="coerce"` — is the bug
     # this module was written to remove.
+
+    def _require_key(self) -> None:
+        """Refuse before spending a round trip, when there is no key to spend it with.
+
+        ``CLAUDE.md`` §3's rule for every client, and ``ALPHAVANTAGE_API_KEY`` defaults to a
+        blank ``SecretStr`` — so "not configured" is the state of every fresh clone rather
+        than an edge case. Deliberately **not** raised through :meth:`_error`, whose
+        ``Failure`` members all describe how a *call* went wrong, and no call was made.
+
+        **ANV-22 is why this exists.** Without it a keyless request really does leave the
+        machine: AlphaVantage answers ``apikey=`` with a ``200`` carrying an ``Error
+        Message``, which this module correctly classifies as ``client_error`` — and a
+        scheduled ingest then spends a round trip per ticker per month, forever, reporting a
+        misconfiguration as though the roster held bad symbols. ANV-19 and ANV-20 both had
+        this guard; this module was the one that did not, and the fan-out is what made the
+        omission expensive.
+        """
+        if not self.is_configured:
+            raise ExternalServiceError(
+                self.vendor,
+                f"The upstream service '{self.vendor}' is not configured.",
+                details={"reason": NOT_CONFIGURED, "setting": API_KEY_SETTING},
+            )
 
     def _parse_intraday(
         self, payload: Any, *, symbol: str, interval: IntradayInterval
@@ -355,11 +412,13 @@ class AlphaVantageClient(BaseHTTPClient):
 
 
 __all__ = [
+    "API_KEY_SETTING",
     "ERROR_MESSAGE_KEY",
     "INTRADAY_FUNCTION",
     "META_DATA_KEY",
     "META_SYMBOL_KEY",
     "META_TIMEZONE_KEY",
+    "NOT_CONFIGURED",
     "OHLCV_KEYS",
     "OUTPUT_SIZE",
     "QUERY_PATH",

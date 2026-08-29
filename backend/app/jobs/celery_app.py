@@ -80,7 +80,7 @@ CELERY_MAIN = "anvex"
 #: that is not in a module listed here is unroutable: the worker answers
 #: ``NotRegistered``. A unit test derives this list from the contents of ``app/jobs/`` and
 #: fails when a new module is added without being registered.
-TASK_MODULES: tuple[str, ...] = ("app.jobs.health",)
+TASK_MODULES: tuple[str, ...] = ("app.jobs.health", "app.jobs.ingest")
 
 #: Seconds a task may run before ``SoftTimeLimitExceeded`` is raised *inside* it — which is
 #: recoverable: the exception unwinds through the bridge's ``finally``, so the engine is
@@ -104,6 +104,15 @@ WORKER_MAX_TASKS_PER_CHILD = 200
 #: answerable from the log without waiting, rare enough to be noise-free.
 PING_INTERVAL = timedelta(minutes=5)
 
+#: How often the intraday ingest fans out. Hourly, and the number is load-bearing rather
+#: than a taste: the fan-out paces its vendor calls with a ``countdown`` per message
+#: (``app/jobs/ingest.py``), so one run occupies
+#: ``MAX_CALLS_PER_RUN * CALL_SPACING_SECONDS`` seconds of wall clock and the interval has to
+#: be longer than that — otherwise two fan-outs overlap and the call rate the spacing was
+#: chosen for doubles. A test asserts the inequality, because nothing else would notice
+#: until the roster grew.
+INGEST_INTERVAL = timedelta(hours=1)
+
 #: The beat schedule. One entry per scheduled job::
 #:
 #:     "<slug>": {"task": <registered name>, "schedule": <timedelta|crontab>,
@@ -118,6 +127,15 @@ BEAT_SCHEDULE: dict[str, dict[str, Any]] = {
         "task": "jobs.health.ping",
         "schedule": PING_INTERVAL,
         "options": {"expires": int(PING_INTERVAL.total_seconds()) - 60},
+    },
+    # The task name is a literal rather than an import: ``app.jobs.ingest`` imports this
+    # module to decorate its tasks, so naming it by import would be a cycle. That is also
+    # exactly what the explicit-name convention buys — a schedule entry and a task agree on
+    # a string, not on a file path.
+    "ingest-intraday": {
+        "task": "jobs.ingest.ingest_all",
+        "schedule": INGEST_INTERVAL,
+        "options": {"expires": int(INGEST_INTERVAL.total_seconds()) - 600},
     },
 }
 
@@ -204,6 +222,7 @@ __all__ = [
     "BEAT_SCHEDULE",
     "BROKER_VISIBILITY_TIMEOUT_SECONDS",
     "CELERY_MAIN",
+    "INGEST_INTERVAL",
     "PING_INTERVAL",
     "RESULT_EXPIRES",
     "TASK_MODULES",

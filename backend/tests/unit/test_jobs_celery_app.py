@@ -22,10 +22,16 @@ from celery.signals import setup_logging, worker_process_init
 
 import app.jobs.celery_app as jobs_module
 from app.db import engine as db_engine
+from app.domain.ingest import (
+    CALL_SPACING_SECONDS,
+    FREE_TIER_CALLS_PER_MINUTE,
+    MAX_CALLS_PER_RUN,
+)
 from app.jobs.base import AnvexTask
 from app.jobs.celery_app import (
     BEAT_SCHEDULE,
     BROKER_VISIBILITY_TIMEOUT_SECONDS,
+    INGEST_INTERVAL,
     RESULT_EXPIRES,
     TASK_MODULES,
     TASK_SOFT_TIME_LIMIT_SECONDS,
@@ -254,6 +260,27 @@ def test_the_schedule_is_wired_into_the_app() -> None:
 def test_the_schedule_has_a_heartbeat_entry() -> None:
     assert BEAT_SCHEDULE["health-ping"]["task"] == "jobs.health.ping"
     assert BEAT_SCHEDULE["health-ping"]["schedule"] == timedelta(minutes=5)
+
+
+def test_the_schedule_has_an_ingest_entry() -> None:
+    assert BEAT_SCHEDULE["ingest-intraday"]["task"] == "jobs.ingest.ingest_all"
+    assert BEAT_SCHEDULE["ingest-intraday"]["schedule"] == INGEST_INTERVAL
+
+
+def test_one_ingest_fan_out_finishes_before_the_next_one_starts() -> None:
+    """The invariant the whole rate-limiting design rests on (ANV-22).
+
+    ``ingest_all`` paces its vendor calls with a ``countdown`` per message rather than with a
+    sleep, so a run occupies ``MAX_CALLS_PER_RUN * CALL_SPACING_SECONDS`` seconds of wall
+    clock. If the beat interval were shorter, two fan-outs would overlap and the call rate
+    the spacing was chosen for would double — straight into AlphaVantage's free-tier limit,
+    and invisible until the roster grew enough for a run to fill the interval.
+    """
+    run_seconds = MAX_CALLS_PER_RUN * CALL_SPACING_SECONDS
+
+    assert run_seconds < INGEST_INTERVAL.total_seconds()
+    # And the pacing itself stays under the vendor's ceiling.
+    assert 60 / CALL_SPACING_SECONDS < FREE_TIER_CALLS_PER_MINUTE
 
 
 @pytest.mark.parametrize("slug", sorted(BEAT_SCHEDULE))

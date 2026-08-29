@@ -41,6 +41,7 @@ from app.deps.session import get_session
 from app.domain.errors import ExternalServiceError
 from app.models import Politician, Stock, StockData, User, Watchlist, WatchlistData
 from app.models.watchlist import DEFAULT_TITLE
+from app.repos.stock_data import UPDATABLE_COLUMNS
 
 #: Every key ``app.schemas.errors.ErrorResponse`` promises, always present.
 ERROR_BODY_KEYS = frozenset({"code", "message", "details", "request_id"})
@@ -290,7 +291,7 @@ class FakeStockDataRepo:
     *behaviour* of the real query rather than pretending to be it, and it implements only
     the method the service actually calls.
 
-    Three behaviours are load-bearing and deliberately faithful:
+    Five behaviours are load-bearing and deliberately faithful:
 
     * ``total`` is counted **before** the window, exactly as ``BaseRepo._page`` does, so an
       ``offset`` past the end is ``([], total)`` and not ``([], 0)``.
@@ -300,6 +301,13 @@ class FakeStockDataRepo:
     * rows come back **chronologically** by ``(date, time, id)``, which is the order the
       real query declares — a chart plots left to right, and paging over an unstable order
       would repeat or skip candles.
+    * :meth:`bulk_upsert` **refuses a batch with an internal duplicate**, as Postgres does
+      (``ON CONFLICT DO UPDATE command cannot affect row a second time``). ANV-22's whole
+      reason for deduplicating in ``app/domain/ingest.py`` is that the real statement fails
+      here, so a forgiving fake would silently pass the bug the tests exist to catch.
+    * :meth:`get_latest_for_stock` orders by ``(date, time, id)`` **descending**, which is
+      the watermark the ingest resumes from. A fake that returned the last-added row would
+      pass an ingest that never sorted.
 
     It filters on ``stock_id`` and nothing else, which is the point of the fake: an unknown
     id yields ``([], 0)``, indistinguishable from a stock that simply has no candles.
@@ -311,13 +319,64 @@ class FakeStockDataRepo:
     the boundary, not merely that the result looked right.
     """
 
+    #: What Postgres says when one statement hits a conflict target twice.
+    DUPLICATE_MESSAGE = "ON CONFLICT DO UPDATE command cannot affect row a second time"
+
     def __init__(self, *candles: StockData) -> None:
         self.candles: list[StockData] = list(candles)
         self.calls: list[tuple[str, Any]] = []
+        #: Raised by the next :meth:`bulk_upsert` and then cleared, so a test can drive the
+        #: "the database refused" branch without a database.
+        self.bulk_upsert_error: Exception | None = None
 
     def add(self, candle: StockData) -> StockData:
         self.candles.append(candle)
         return candle
+
+    async def get_latest_for_stock(self, session: Any, stock_id: uuid.UUID) -> StockData | None:
+        """The newest candle for this stock, or ``None`` — the ingest's watermark."""
+        self.calls.append(("get_latest_for_stock", stock_id))
+        owned = [candle for candle in self.candles if candle.stock_id == stock_id]
+        if not owned:
+            return None
+        return max(owned, key=lambda candle: (candle.date, candle.time, candle.id))
+
+    async def bulk_upsert(self, session: Any, rows: Any) -> int:
+        """Insert or refresh a batch keyed on ``(stock_id, date, time)``; count what it hit.
+
+        Faithful to the three awkward parts of the real statement: an empty batch is ``0``
+        with no SQL at all, an internal duplicate is a hard failure, and only
+        :data:`~app.repos.stock_data.UPDATABLE_COLUMNS` are overwritten on a conflict — the
+        natural key is the match condition and ``id`` is identity, so a re-observed candle
+        keeps its row.
+        """
+        values = [dict(row) for row in rows]
+        self.calls.append(("bulk_upsert", values))
+        if self.bulk_upsert_error is not None:
+            error, self.bulk_upsert_error = self.bulk_upsert_error, None
+            raise error
+        if not values:
+            return 0
+
+        keys = [(row["stock_id"], row["date"], row["time"]) for row in values]
+        if len(set(keys)) != len(keys):
+            raise RuntimeError(self.DUPLICATE_MESSAGE)
+
+        for row, key in zip(values, keys, strict=True):
+            existing = next(
+                (
+                    candle
+                    for candle in self.candles
+                    if (candle.stock_id, candle.date, candle.time) == key
+                ),
+                None,
+            )
+            if existing is None:
+                self.candles.append(StockData(id=next(_candle_ids), **row))
+            else:
+                for column in UPDATABLE_COLUMNS:
+                    setattr(existing, column, row[column])
+        return len(values)
 
     async def list_for_stock(
         self,
@@ -997,8 +1056,135 @@ def make_article(
     )
 
 
+def make_bar(
+    *,
+    day: date,
+    at: time,
+    open: str = "100.0000",  # the vendor's own field name; renaming it here would be
+    high: str = "101.0000",  # the very translation ANV-22 owns.
+    low: str = "99.0000",
+    close: str = "100.5000",
+    volume: int = 1_000,
+) -> Any:
+    """One vendor candle, in the vendor's own OHLCV words, for :class:`FakeAlphaVantageClient`.
+
+    A ``SimpleNamespace`` rather than :class:`~app.clients.alphavantage.IntradayCandle`,
+    because everything downstream reads it structurally — ``app.domain.ingest.Candle`` is a
+    ``Protocol`` and the service reaches for the five fields by name. Using the vendor model
+    would test pydantic rather than the rule.
+
+    Prices are **strings** parsed into :class:`~decimal.Decimal`, exactly as the real client
+    parses them: ``Decimal("100.0000")`` keeps its four decimal places and
+    ``Decimal(100.0)`` from a float does not. Passing more precision than the column holds is
+    the interesting case, and it is what a quantisation test does.
+    """
+    return SimpleNamespace(
+        date=day,
+        time=at,
+        open=Decimal(open),
+        high=Decimal(high),
+        low=Decimal(low),
+        close=Decimal(close),
+        volume=volume,
+    )
+
+
+def make_series(
+    *bars: Any,
+    symbol: str = "AAPL",
+    interval: str = "5min",
+    timezone: str | None = "US/Eastern",
+) -> Any:
+    """A whole vendor response for :class:`FakeAlphaVantageClient`.
+
+    ``timezone`` defaults to what AlphaVantage actually answers for US equities and is
+    settable, because "the vendor quoted a zone that is not the exchange's" is a case the
+    trading-hours rule has to get right and no fixture else would exercise it.
+    """
+    return SimpleNamespace(symbol=symbol, interval=interval, timezone=timezone, candles=tuple(bars))
+
+
+class FakeAlphaVantageClient:
+    """An in-memory stand-in for :class:`~app.clients.alphavantage.AlphaVantageClient`.
+
+    Same idea and the same discipline as :class:`FakeNewsApiClient`: ``IngestService``'s own
+    branches — the ticker resolution, the trading-hours filter, the watermark, the rename,
+    the quantisation and the dedupe — are worth testing at unit speed, and none of them is
+    about HTTP.
+
+    Faithful to the awkward parts of the real client, because a forgiving fake silently
+    passes the bug the test exists to catch:
+
+    * a failure is an ``ExternalServiceError`` raised **out of the call**, never a ``None``
+      return or an empty series — including AlphaVantage's rate limit, which arrives as a
+      ``200`` and would otherwise look like a quiet month;
+    * ``responses`` is keyed by ``month``, so a test can give one month bars and the next
+      nothing, which is what a stock that only started trading last week looks like;
+    * ``calls`` records ``(symbol, interval, month)``, so a test can assert **what was asked
+      of the vendor** — that the month reached the request and the ticker was normalised
+      before it did.
+    """
+
+    def __init__(
+        self,
+        *,
+        series: Any = None,
+        responses: Mapping[str, Any] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.series = series
+        self.responses = dict(responses or {})
+        self.error = error
+        #: ``(symbol, interval, month)`` for every call, in order.
+        self.calls: list[tuple[str, str, str | None]] = []
+        self.closed = False
+
+    async def fetch_intraday(
+        self, symbol: str, *, interval: Any = "5min", month: str | None = None
+    ) -> Any:
+        self.calls.append((symbol, str(interval), month))
+        if self.error is not None:
+            raise self.error
+        if month is not None and month in self.responses:
+            return self.responses[month]
+        return self.series if self.series is not None else make_series(symbol=symbol)
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+    async def __aenter__(self) -> FakeAlphaVantageClient:
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        await self.aclose()
+
+
+def rate_limited() -> ExternalServiceError:
+    """AlphaVantage's five-a-minute refusal, as ANV-18's client raises it.
+
+    Carries **no** ``attempts`` key, deliberately: it arrived as a ``200`` body, so the retry
+    loop had already succeeded and there is no attempt count belonging to it (ANV-18). A
+    test that invented one would be asserting against a shape the client never produces.
+    """
+    return ExternalServiceError(
+        "alphavantage",
+        "The upstream service 'alphavantage' rejected the request: rate limited.",
+        details={"reason": "rate_limited"},
+    )
+
+
+def not_configured() -> ExternalServiceError:
+    """The state of a fresh clone: ``ALPHAVANTAGE_API_KEY`` is blank and no call was made."""
+    return ExternalServiceError(
+        "alphavantage",
+        "The upstream service 'alphavantage' is not configured.",
+        details={"reason": "not_configured", "setting": "ALPHAVANTAGE_API_KEY"},
+    )
+
+
 __all__ = [
     "ERROR_BODY_KEYS",
+    "FakeAlphaVantageClient",
     "FakeNewsApiClient",
     "FakePoliticianRepo",
     "FakeS3Client",
@@ -1009,11 +1195,15 @@ __all__ = [
     "StubSession",
     "assert_error_envelope",
     "make_article",
+    "make_bar",
     "make_candle",
     "make_entry",
     "make_politician",
+    "make_series",
     "make_stock",
     "make_user",
     "make_watchlist",
+    "not_configured",
     "override_session",
+    "rate_limited",
 ]

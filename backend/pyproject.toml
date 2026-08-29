@@ -21,6 +21,11 @@ dependencies = [
     "python-multipart",
     "aioboto3",
     "structlog",
+    # `app/domain/ingest.py` resolves the exchange's timezone with `zoneinfo`. Windows ships
+    # no IANA database, so `ZoneInfo("US/Eastern")` there depends entirely on this package.
+    # It arrives transitively via celery today; depended on directly because without it the
+    # trading-hours rule is *wrong* rather than absent.
+    "tzdata",
 ]
 
 [dependency-groups]

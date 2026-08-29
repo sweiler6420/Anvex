@@ -905,3 +905,61 @@ class TestTheSubclassStaysSmall:
         vendor = AlphaVantageClient(Settings(alphavantage_api_key=SecretStr("")))
 
         assert vendor.auth_params()["apikey"].get_secret_value() == ""
+
+
+# ---------------------------------------------------------------------------------------
+# the pre-flight (ANV-22)
+# ---------------------------------------------------------------------------------------
+
+
+class TestTheKeylessPreFlight:
+    """A blank ``ALPHAVANTAGE_API_KEY`` is refused **before** a request leaves the machine.
+
+    ``CLAUDE.md`` §3's rule for every client, and the default state of a fresh clone. ANV-19
+    and ANV-20 both shipped this guard; this module did not, and **ANV-22 is what made the
+    omission expensive**: a scheduled fan-out with no key spends one real round trip per
+    ticker per month and gets back AlphaVantage's ``200`` with an ``Error Message``, which is
+    correctly classified as ``client_error`` and is therefore indistinguishable from a bad
+    symbol. The misconfiguration would be reported, forever, as a defect in the roster — and
+    the calls would keep going out.
+    """
+
+    @pytest.fixture
+    def keyless(self, settings: Settings) -> AlphaVantageClient:
+        return AlphaVantageClient(
+            settings.model_copy(update={"alphavantage_api_key": SecretStr("")})
+        )
+
+    @pytest.mark.parametrize("key", ["", "   "])
+    async def test_a_blank_key_names_the_setting_and_makes_no_request(
+        self, settings: Settings, mock_http: respx.MockRouter, key: str
+    ) -> None:
+        route = mock_http.get(QUERY_URL).respond(200, json=intraday_payload())
+        vendor = AlphaVantageClient(
+            settings.model_copy(update={"alphavantage_api_key": SecretStr(key)})
+        )
+
+        with pytest.raises(ExternalServiceError) as caught:
+            await vendor.fetch_intraday("IBM", month="2024-01")
+
+        assert details_of(caught)["reason"] == "not_configured"
+        assert details_of(caught)["setting"] == "ALPHAVANTAGE_API_KEY"
+        assert route.call_count == 0, "a keyless call still reached the vendor"
+
+    async def test_it_says_not_configured_rather_than_client_error(
+        self, keyless: AlphaVantageClient
+    ) -> None:
+        """The distinction is the point: ``client_error`` sends an operator looking at the
+        ticker rather than at ``.env``."""
+        with pytest.raises(ExternalServiceError) as caught:
+            await keyless.fetch_intraday("IBM")
+
+        assert details_of(caught)["reason"] != "client_error"
+        # No call was made, so there is no attempt count belonging to this failure.
+        assert "attempts" not in details_of(caught)
+
+    def test_is_configured_answers_without_provoking_a_failure(self, settings: Settings) -> None:
+        blank = settings.model_copy(update={"alphavantage_api_key": SecretStr("  ")})
+
+        assert AlphaVantageClient(settings).is_configured is True
+        assert AlphaVantageClient(blank).is_configured is False

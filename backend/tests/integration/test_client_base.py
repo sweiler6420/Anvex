@@ -18,7 +18,7 @@ finishes instantly and asserts the *decision* rather than the wall clock.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from decimal import Decimal
 from typing import Any
 
@@ -28,8 +28,11 @@ import respx
 from pydantic import BaseModel, SecretStr
 from structlog.testing import capture_logs
 
+from app.clients.alphavantage import AlphaVantageClient
 from app.clients.base import REDACTED, BaseHTTPClient, RetryPolicy
+from app.clients.newsapi import NewsApiClient
 from app.domain.errors import AnvexError, ExternalServiceError
+from app.settings import Settings
 
 #: The credential that must never turn up in a log line or an exception.
 API_KEY = "super-secret-key-9000"
@@ -593,3 +596,71 @@ class TestTheErrorContract:
 
         assert "fakevendor" in caught.value.message
         assert "rate limiting" in caught.value.message
+
+
+# ---------------------------------------------------------------------------------------
+# the credential pre-flight, swept across every vendor (ANV-22)
+# ---------------------------------------------------------------------------------------
+
+
+#: Every credentialled **HTTP** client in ``app/clients/``, with the settings field it reads
+#: and one operation that must refuse before a request. Derived assertions rather than N
+#: hand-written tests, on ANV-15's argument: the next client is the one that gets forgotten.
+#: ``S3Client`` is deliberately absent - it is reached through an SDK rather than a URL, so it
+#: has no ``httpx`` request for ``respx`` to count, and ANV-20 asserts the same property
+#: against its own transport in ``tests/unit/test_clients_s3.py``.
+CREDENTIALLED_CLIENTS: list[tuple[str, type[Any], str, str, Callable[[Any], Awaitable[Any]]]] = [
+    (
+        "alphavantage",
+        AlphaVantageClient,
+        "alphavantage_api_key",
+        "ALPHAVANTAGE_API_KEY",
+        lambda client: client.fetch_intraday("IBM", month="2024-01"),
+    ),
+    (
+        "newsapi",
+        NewsApiClient,
+        "newsapi_api_key",
+        "NEWSAPI_API_KEY",
+        lambda client: client.fetch_top_headlines(),
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("vendor", "client_cls", "field", "setting", "operation"),
+    CREDENTIALLED_CLIENTS,
+    ids=[case[0] for case in CREDENTIALLED_CLIENTS],
+)
+async def test_no_client_spends_a_round_trip_without_its_credential(
+    mock_http: respx.MockRouter,
+    vendor: str,
+    client_cls: type[Any],
+    field: str,
+    setting: str,
+    operation: Callable[[Any], Awaitable[Any]],
+) -> None:
+    """``CLAUDE.md`` §3's missing-credential rule, asserted for every vendor at once.
+
+    It was prose for four tickets and ``app/clients/alphavantage.py`` quietly did not obey it
+    (found by ANV-22, whose scheduled fan-out turned one missing environment variable into a
+    real outbound request per ticker per month — reported as ``client_error``, which is what
+    a *bad symbol* looks like). A rule that must hold for every client is a derived sweep,
+    not N tests one of which will be forgotten.
+    """
+    settings = Settings(_env_file=None, **{field: SecretStr("")})
+    mock_http.route().respond(200, json={})
+    client = client_cls(settings)
+
+    try:
+        with pytest.raises(ExternalServiceError) as caught:
+            await operation(client)
+    finally:
+        await client.aclose()
+
+    assert caught.value.details["reason"] == "not_configured"
+    assert caught.value.details["setting"] == setting
+    assert caught.value.details["service"] == vendor
+    # No call was made, so no attempt count belongs to this failure (ANV-18's rule).
+    assert "attempts" not in caught.value.details
+    assert mock_http.calls.call_count == 0, f"{vendor} reached the network with no credential"
