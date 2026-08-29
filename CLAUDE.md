@@ -1356,6 +1356,79 @@ rules that apply wherever the *screen* is what protects a §4 property.
   `routes/unauthorized.jsx` is the *same file* on Windows and macOS. Pages live under
   `features/<area>/components/`, which is ANV-29's convention anyway.
 
+### A page made of fragments, and the parts of a port that are not markup (ANV-32)
+
+`features/home/` is the marketing page: `Hero`, `Features`, `Workflow`, `Pricing`, `Contact`,
+`Footer` and the `HomePage` that composes them. ANV-29's page conventions all still hold; these
+are the rules a **content** page adds, and the two shell decisions ANV-28 deferred to it.
+
+- **A fragment the header links to is a contract between two files, and a derived test is what
+  keeps it.** `components/layout/navItems.js` is the single definition of the marketing nav, and
+  four of its five items are `HOME_ROUTE` plus a `hash`. The page's test therefore reads
+  `ANONYMOUS_NAV_ITEMS`, filters to the items carrying a `hash`, and asserts each id exists **on
+  the rendered page** — it does not restate `['features', 'workflow', 'pricing', 'contact']` as a
+  literal, because a literal drifts in exactly the case that matters. A renamed section then fails
+  the suite instead of turning a nav link into a scroll to nowhere, which is invisible in review
+  and looks like a design decision in use. A one-line guard asserts the derived list is non-empty,
+  so emptying `navItems.js` cannot make the sweep pass vacuously.
+- **Scroll-spy stays declined, and the reason is not "jsdom".** `Link` computes "am I current"
+  itself and writes `aria-current="page"` from `NAV_ACTIVE_OPTIONS`; a scroll observer would be a
+  second authority on the same attribute, and the two would disagree with each other *and* with
+  the address bar (`/#pricing` is a real, shareable statement of where the reader is). The header
+  also renders on every route and only one route has anything to spy on. The accepted cost is
+  stated rather than discovered: clicking a nav item highlights it, free-scrolling past a section
+  does not. Revisit only with a design where one of the two authorities is deleted.
+- **A skip link must not write to the location.** `<a href="#main-content">` is the textbook
+  implementation and it is wrong *here*, because the fragment is part of the location and the
+  location is what the header reads for "which nav item is current" — pressing the first control
+  on the page would un-highlight the nav. `components/layout/SkipLink.jsx` is a `<button>` that
+  moves focus to `<main tabIndex={-1}>` and scrolls it into view. WCAG 2.4.1 asks for *a mechanism
+  to bypass blocks*, not for an anchor, and the mechanism is better on its merits: the classic
+  failure of a fragment skip link is a browser that scrolls without moving focus, so the next Tab
+  resumes at the top of the document. It renders **before** `Header`, so it is genuinely first in
+  the tab order, and it is `sr-only focus:not-sr-only`. Two tests, failing for different
+  mutations: focus lands on `<main>` (drop `tabIndex={-1}` and this fails), and the router's
+  location is unchanged with the nav still `aria-current` (implement it as a `<Link>` or add a
+  `navigate` and this fails).
+- **A decorative icon must not be the only thing that carries a meaning.** The old pricing table
+  marked a feature included or excluded with a green tick or a red cross, both `aria-hidden` — so
+  the free tier read to a screen reader as though it included the two things it exists to
+  withhold, and a red/green colour deficiency left a sighted reader with only the glyph's shape.
+  The fix is a `sr-only` word in front of the label (`Included: ` / `Not included: `), which costs
+  no layout and survives both `aria-hidden` and colour. **The rule generalises: if removing the
+  colour and the icon changes what a row *means*, the meaning belongs in text.**
+- **A control that is off for a reason worth reading is `aria-disabled`, not `disabled`.**
+  `disabled` removes a control from the tab order *and* from most screen readers' browse output,
+  so the reason never reaches the person who needed it. `aria-disabled="true"` plus an
+  `aria-describedby` saying why leaves it reachable, and the refusal moves into the submit handler
+  where a test can see it. (ANV-29's in-flight `submitting` guard is the opposite case — there the
+  button really should be `disabled`, because the explanation is "it is already happening".)
+- **A component that is not ported yet is a prop with a default, never a stub import or a TODO.**
+  `Workflow` takes `demo` and renders `demo ?? <WorkflowDemoPlaceholder />`; ANV-35's entire change
+  is `<Workflow demo={<InteractiveDesktop />} />` in `HomePage.jsx`. A prop keeps `features/home/`
+  from depending on a subsystem that does not exist, and — the part that matters — it makes the
+  seam **assertable**: a test passes a stub and checks it lands inside the panel, so the seam
+  cannot be restyled away silently. The placeholder is `aria-hidden` and **textless**: an empty
+  panel reads as a broken image, and a caption would put words on a marketing page that are
+  nobody's.
+- **Porting is not transcription, and the four things worth re-checking every time** are heading
+  order (`<h5>` under an `<h2>` skips two levels; the size was always the class, never the tag),
+  a visual heading marked up as a `<p>` (unreachable by heading navigation), a repeated card
+  marked up as `<div>`s rather than a list, and an `<a href="#">` — which is not a placeholder but
+  a control that takes focus, announces itself as a link and scrolls the reader to the top. An
+  entry with no destination yet renders as **text**; give it a `hash`/`to` the day the page exists.
+  Converting a `<div>` wrapper to `<ul>`/`<li>` is layout-neutral because Tailwind's preflight
+  already zeroes a list's margin, padding and marker.
+- **`src/test/setup.js` also no-ops `Element.prototype.scrollIntoView`**, for `window.scrollTo`'s
+  reason one element down. jsdom does not implement it *at all*, and TanStack's scroll restoration
+  calls it on any hash navigation whose target is really in the document — which was unreachable
+  until this page gave the header's four fragments something to find.
+- **Copy is the page owner's, and a port says so rather than fixing it.** Two of `Workflow`'s four
+  paragraphs say "AverageInvestor" on a page whose hero says "Anvex"; `Features` carries
+  `sm:1/2` (a typo for `sm:w-1/2`, so not a Tailwind class at all) and only `Pricing`'s middle card
+  carries `h-full`. All three are ported as found and reported, because a port that quietly
+  improves the wording is a port nobody can review against the original.
+
 ### Frontend test harness (ANV-23)
 
 The mirror of §6's backend rules: **extend the one setup file and the one MSW server; never start a

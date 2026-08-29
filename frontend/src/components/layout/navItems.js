@@ -91,6 +91,32 @@ export function navItemsFor(isAuthenticated) {
  * visible. Not ported: those sections arrive with ANV-32, and jsdom has neither layout nor
  * `IntersectionObserver`, so it would be ~80 lines of unverifiable code observing elements
  * that are not there. Scroll-spying belongs with the page being spied on.
+ *
+ * **ANV-32 looked again, with the sections finally on the page, and still declines it.**
+ * The verdict is not "it is hard to test" — it is that scroll-spy would be a *second*
+ * authority on a question this file already answers, and the two would disagree:
+ *
+ *  - `Link` computes "am I current" itself and writes `aria-current="page"` from it, so
+ *    overriding the answer from outside means passing a competing `activeProps` and
+ *    stripping `aria-current` back off — two rules for one attribute, which is the drift
+ *    every convention in CLAUDE.md §5 exists to prevent.
+ *  - The nav would then contradict the address bar. `/#pricing` is a real, shareable,
+ *    Back-button-able statement of where the reader is; scroll-spy would move the underline
+ *    off "Pricing" while the URL still said `#pricing`.
+ *  - The header renders on **every** route, and only one route has anything to spy on. The
+ *    observer would be constructed, and its "no section is visible" branch exercised, on
+ *    `/login`, `/research` and the 404.
+ *  - And it remains untestable *in kind*, not merely in this environment. jsdom has no
+ *    layout, so every section's bounding box is 0×0 and identical; a polyfilled
+ *    `IntersectionObserver` cannot produce a meaningful answer from it, and the only test
+ *    left to write is one that hand-fires the callback we wrote and asserts our own
+ *    `setState` ran. That is a test of the mock.
+ *
+ * **What the reader loses, stated rather than glossed:** clicking a nav item still
+ * highlights it (the hash lands in the location), but *free-scrolling* past a section does
+ * not move the highlight. Someone who reads the page top to bottom without touching the nav
+ * sees "Home" underlined throughout. That is the whole cost, and it is smaller than one
+ * `aria-current` attribute with two authors.
  */
 export const NAV_ACTIVE_OPTIONS = Object.freeze({ exact: true, includeHash: true })
 

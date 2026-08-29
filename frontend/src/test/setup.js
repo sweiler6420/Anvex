@@ -32,6 +32,23 @@ beforeAll(() => {
  */
 window.scrollTo = () => {}
 
+/**
+ * The same stub, for the same reason, one element down (ANV-32).
+ *
+ * jsdom does not implement `Element.prototype.scrollIntoView` **at all** — it is missing
+ * rather than a warning stub — and TanStack Router's scroll restoration calls it on any
+ * navigation carrying a hash whose target is actually in the document. That was
+ * unreachable until ANV-32: the header linked to `#features`/`#workflow`/`#pricing`/
+ * `#contact` and nothing had those ids, so the router's own `getElementById(...)?.` short
+ * circuit swallowed it. With the home page's sections in place, every fragment navigation
+ * throws a `TypeError` inside the router's emit and prints eight lines of stack for a
+ * no-op, which is precisely the noise `window.scrollTo` was stubbed to stop.
+ *
+ * Assigned on the prototype, because the elements are the router's to find, not ours to
+ * hand it.
+ */
+Element.prototype.scrollIntoView = () => {}
+
 afterEach(() => {
   cleanup()
   server.resetHandlers()

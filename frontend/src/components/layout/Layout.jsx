@@ -1,6 +1,7 @@
 import { Outlet } from '@tanstack/react-router'
 
 import Header from './Header'
+import SkipLink, { MAIN_CONTENT_ID } from './SkipLink'
 
 /**
  * The application shell (ANV-28), ported from `AverageInvestorWeb/src/components/Layout.jsx`.
@@ -17,20 +18,22 @@ import Header from './Header'
  * screen reader's "skip to main" lands the user back on the nav). Split here into the
  * `<nav>` `Header` renders and a sibling `<main>` holding the outlet, with the inline
  * width/height replaced by `min-h-screen` + `flex-1` so a short page still fills the
- * viewport and the footer ANV-32 adds has somewhere to sit.
+ * viewport and the home page's footer has somewhere to sit.
  *
- * There is no skip link, and that is a decision rather than an omission. The header exposes
- * at most nine tab stops, and the obvious implementation — `<a href="#main-content">` —
- * would push a `#main-content` fragment into the router's location, which is the same
- * location `Header` reads to decide which marketing item is current: pressing skip would
- * un-highlight the nav. It becomes worth solving in ANV-32, when the home page grows long
- * enough for skipping to be worth something.
+ * **ANV-32 added the skip link** that ANV-28 deferred, and it is a `<button>` rather than
+ * an `<a href="#main-content">` because a fragment is part of the location and the location
+ * is what `Header` reads to decide which nav item is current. The full argument is in
+ * `SkipLink.jsx`; the two lines it needs here are the element itself, rendered **before**
+ * `Header` so Tab reaches it first, and `tabIndex={-1}` on the `<main>`, which makes the
+ * target programmatically focusable without putting it in the tab order. `focus:outline-none`
+ * suppresses a ring on a container the user never chose to focus.
  */
 export default function Layout() {
   return (
     <div className="flex min-h-screen flex-col">
+      <SkipLink />
       <Header />
-      <main id="main-content" className="flex-1">
+      <main id={MAIN_CONTENT_ID} tabIndex={-1} className="flex-1 focus:outline-none">
         <Outlet />
       </main>
     </div>
