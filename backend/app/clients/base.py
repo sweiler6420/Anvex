@@ -711,7 +711,7 @@ class BaseHTTPClient:
         self,
         failure: Failure,
         *,
-        attempts: int,
+        attempts: int | None = None,
         status_code: int | None = None,
         retry_after: float | None = None,
     ) -> ExternalServiceError:
@@ -721,8 +721,18 @@ class BaseHTTPClient:
         where they exist — the upstream status and the wait it asked for. It never gets the
         vendor's body or URL: ``CLAUDE.md`` §4 makes the error body a public contract, and
         forwarding upstream output through it is how an internal detail becomes an API.
+
+        ``attempts`` is optional because a **subclass** raises through here too, and a
+        failure it found inside an otherwise-successful body has no attempt count of its
+        own — the retry loop had already succeeded. (ANV-18: AlphaVantage answers a
+        throttled request with ``200`` and a ``"Note"`` rather than a 429.) Omitting the
+        key is honest; inventing a ``1`` would not be. This method is also why a subclass
+        needs no message templates of its own: a rate limit reads identically to a consumer
+        whether it arrived as a 429 or as a 200 body.
         """
-        details: dict[str, Any] = {"reason": failure.value, "attempts": attempts}
+        details: dict[str, Any] = {"reason": failure.value}
+        if attempts is not None:
+            details["attempts"] = attempts
         if status_code is not None:
             details["status_code"] = status_code
         if retry_after is not None:

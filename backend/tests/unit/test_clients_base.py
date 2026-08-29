@@ -468,3 +468,21 @@ class TestTheErrorContract:
         assert error.details["reason"] == failure.value
         assert error.details["service"] == "vendor"
         assert error.details["attempts"] == 1
+
+    def test_a_subclass_may_raise_a_failure_that_has_no_attempt_count(self) -> None:
+        """ANV-18: AlphaVantage answers a throttled request with ``200`` and a ``"Note"``,
+        so the *parser* raises — by which point the retry loop has already succeeded and
+        there is no attempt count belonging to that failure. The key is omitted rather than
+        fabricated, and the subclass still gets the base's message rather than writing its
+        own, so a rate limit reads identically whether it arrived as a 429 or as a 200.
+        """
+
+        class Vendor(BaseHTTPClient):
+            vendor = "vendor"
+            base_url = "https://vendor.example"
+
+        error = Vendor()._error(Failure.RATE_LIMITED)
+
+        assert "attempts" not in error.details
+        assert error.details == {"service": "vendor", "reason": "rate_limited"}
+        assert error.message == "The upstream service 'vendor' is rate limiting Anvex."

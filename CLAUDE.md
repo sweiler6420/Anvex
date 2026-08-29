@@ -145,6 +145,25 @@ return a schema. Versioned as `app/api/v1/<resource>.py`, aggregated by `app/api
 - **Proactive quota throttling is not a client concern.** Honouring a `Retry-After` is; sleeping to
   stay under five-calls-a-minute is a scheduling decision for the job that fans out, because a
   request path cannot block to honour it.
+- **A 2xx that means a failure is the vendor module's job, and it raises through the base.** Some
+  vendors signal a refusal in the body rather than the status line — AlphaVantage answers a
+  throttled request with `200` and a JSON `"Note"`/`"Information"`, and an unknown symbol with an
+  `"Error Message"`. `BaseHTTPClient` cannot see any of that: a 2xx carrying valid JSON *is* a good
+  response to it. So the subclass's **parser** detects it and raises `self._error(Failure.X)` —
+  reusing the base's constructor rather than writing a message template, so a rate limit is
+  indistinguishable to a consumer whether it arrived as a 429 or as a 200. `attempts` is omitted
+  there, because the retry loop had already succeeded and there is no attempt count belonging to
+  that failure; a fabricated `1` would be worse than an absent key. **Do not add a base hook for
+  this until a second vendor needs one** — §4's "move on the second caller" rule applies to hooks
+  too, and a hook with one caller fixes its own shape against a single example.
+- **A client does not round, quantise, or reshape a number to fit a column.** It parses the
+  vendor's *string* straight into `Decimal` (never via `float`, which has already lost the value by
+  the time `Decimal` sees it) and reports what was said. The storage scale lives in `app/models/`,
+  which `app/clients/` may not import — that is the AST sweep telling you whose rule it is.
+  Quantising, windowing and filtering are Anvex rules and belong in `app/domain/`. Equally, a
+  parser never *silently* repairs: an unusable number is `ExternalServiceError`, never a `NaN` that
+  reaches a `NUMERIC` column (the old ETL's `pd.to_numeric(errors="coerce")` is the bug being
+  designed out).
 - **Rule of thumb: if it makes a network call to something we do not own, it is a client.**
 
 ### `app/data/` — static and seed data
