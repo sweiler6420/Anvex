@@ -38,6 +38,7 @@ from fastapi import FastAPI
 from httpx import Response
 
 from app.deps.session import get_session
+from app.domain.errors import ExternalServiceError
 from app.models import Politician, Stock, StockData, User, Watchlist, WatchlistData
 from app.models.watchlist import DEFAULT_TITLE
 
@@ -857,6 +858,114 @@ class FakeNewsApiClient:
         return SimpleNamespace(total_results=self.total, articles=self.articles)
 
 
+class FakeS3Client:
+    """An in-memory stand-in for :class:`~app.clients.s3.S3Client` (ANV-20).
+
+    A ``dict`` with an S3 accent. It exists because ``StorageService``'s interesting parts —
+    the key it composes, the ownership gate, and the single translation of
+    ``object_not_found`` into a 404 — are worth testing at unit speed and none of them is
+    about ``botocore``.
+
+    Faithful to the awkward parts of the real client on purpose, because a forgiving fake
+    silently passes the bug the test exists to catch:
+
+    * a missing object raises the **real** :class:`~app.domain.errors.ExternalServiceError`
+      with ``details["reason"] == "object_not_found"``, never returns ``None`` — that reason
+      string is precisely what the service branches on;
+    * ``delete_object`` succeeds for a key that was never there, as S3's does;
+    * ``presigned_get_url`` returns a URL without checking that the object exists, because
+      presigning is local arithmetic and the real one does not check either — which is why
+      ``StorageService.download_url`` has to ``HEAD`` first.
+
+    ``error`` forces every operation to raise, for the "S3 is down" branches.
+    """
+
+    def __init__(
+        self,
+        objects: Mapping[str, bytes] | None = None,
+        *,
+        bucket: str = "anvex-test",
+        error: Exception | None = None,
+        presigned_url: str = "https://s3.example.com/signed?X-Amz-Signature=deadbeef",
+    ) -> None:
+        self.objects: dict[str, bytes] = dict(objects or {})
+        #: What each stored object was told it was, by key.
+        self.content_types: dict[str, str | None] = dict.fromkeys(self.objects)
+        self.bucket = bucket
+        self.error = error
+        self.presigned_url = presigned_url
+        #: ``(operation, kwargs)`` for every call, in order.
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.closed = False
+
+    async def put_object(
+        self,
+        key: str,
+        body: bytes,
+        *,
+        content_type: str | None = None,
+        metadata: Mapping[str, str] | None = None,
+    ) -> Any:
+        self._record("put_object", key=key, content_type=content_type, metadata=metadata)
+        self.objects[key] = body
+        self.content_types[key] = content_type
+        return SimpleNamespace(
+            key=key,
+            etag='"fake-etag"',
+            size_bytes=len(body),
+            content_type=content_type,
+            metadata=dict(metadata or {}),
+        )
+
+    async def get_object(self, key: str) -> Any:
+        self._record("get_object", key=key)
+        if key not in self.objects:
+            raise self._missing()
+        return SimpleNamespace(
+            key=key,
+            body=self.objects[key],
+            etag='"fake-etag"',
+            content_type=self.content_types.get(key),
+            metadata={},
+        )
+
+    async def object_exists(self, key: str) -> bool:
+        self._record("object_exists", key=key)
+        return key in self.objects
+
+    async def delete_object(self, key: str) -> None:
+        self._record("delete_object", key=key)
+        self.objects.pop(key, None)
+        self.content_types.pop(key, None)
+
+    async def presigned_get_url(
+        self, key: str, *, expires_in: int, filename: str | None = None
+    ) -> str:
+        self._record("presigned_get_url", key=key, expires_in=expires_in, filename=filename)
+        return self.presigned_url
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+    @property
+    def operations(self) -> list[str]:
+        """Just the operation names, for "the gate refused before any call" assertions."""
+        return [operation for operation, _ in self.calls]
+
+    def _record(self, operation: str, **kwargs: Any) -> None:
+        self.calls.append((operation, kwargs))
+        if self.error is not None:
+            raise self.error
+
+    @staticmethod
+    def _missing() -> ExternalServiceError:
+        return ExternalServiceError(
+            "s3",
+            "The upstream service 's3' has no such object.",
+            details={"reason": "object_not_found", "status_code": 404},
+        )
+
+
 def make_article(
     *,
     title: str | None = "A headline",
@@ -892,6 +1001,7 @@ __all__ = [
     "ERROR_BODY_KEYS",
     "FakeNewsApiClient",
     "FakePoliticianRepo",
+    "FakeS3Client",
     "FakeStockDataRepo",
     "FakeStockRepo",
     "FakeUserRepo",

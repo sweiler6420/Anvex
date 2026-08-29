@@ -142,6 +142,27 @@ return a schema. Versioned as `app/api/v1/<resource>.py`, aggregated by `app/api
   vendor does not share it, so a vendor payload is parsed into a model *defined in the client
   module*. A client wanting a normalised ticker is asking the wrong layer; §4 makes that the
   service's job.
+- **A vendor reached through an SDK keeps the contract and drops the transport.** `BaseHTTPClient`
+  is *HTTP*: it builds an `httpx.Request`, retries it, redacts its URL and decodes its body. An SDK
+  (ANV-20's `aioboto3`) does all of that itself and offers no seam to hand it a client, so
+  subclassing to inherit a lifecycle and then override everything that uses it would be a base class
+  in name only. What such a module still owes is the four things above it depends on: one vendor and
+  no Anvex knowledge, a typed model out, `ExternalServiceError` as its **only** exit, and structured
+  logging with nothing secret written down. It reproduces the lifecycle by hand — lazily created,
+  explicitly closed, a call after closing raises — and it imports `scrub` from the base rather than
+  re-deriving it.
+- **A `Failure` enum belongs to a transport, and its *values* belong to the layer.** `Failure` is
+  HTTP-shaped, so forcing S3 onto it collapses distinctions a caller acts on: a missing key, a
+  missing bucket and a rejected signature are 404/404/403 and would all read as `client_error`.
+  A module whose vendor has failures the HTTP taxonomy cannot express declares its own `StrEnum`
+  (`S3Failure`) — but **spells the overlapping members identically** (`transport_error`,
+  `server_error`, `rate_limited`, `client_error`), so `details["reason"]` stays one vocabulary
+  across `app/clients/` and only the genuinely new members have to be learned. The test that keeps
+  this honest asserts the shared spellings *and* enumerates the additions.
+- **Where the SDK owns the retry loop, `details` carries no `attempts`.** `botocore` already knows
+  which S3 codes are transient and applies AWS's own backoff, so a second loop on top would retry at
+  two layers; the client configures the SDK's instead. It does not report an attempt count, so the
+  key is **absent** — ANV-18's rule, applied to a different cause: inventing a `1` would be worse.
 - **Proactive quota throttling is not a client concern.** Honouring a `Retry-After` is; sleeping to
   stay under five-calls-a-minute is a scheduling decision for the job that fans out, because a
   request path cannot block to honour it.
@@ -242,9 +263,19 @@ guards, client/service factories. Dependencies wire objects together; they do no
   cross-request pooling the client base exists for — one extra handshake — and buys no leaked
   pool, no shared mutable state between tests, and no lifespan edit for one endpoint. Constructing
   one is cheap and opens no socket (the base creates its transport lazily), so a request that
-  never reaches the vendor costs nothing. Keeping a pool warm means an application-scoped client
-  owned by the lifespan and shared with the Celery worker; that is a decision for whichever ticket
-  has a second caller for it, and this factory is the only thing that changes.
+  never reaches the vendor costs nothing.
+- **Share the part that has no event loop; build the part that has one per request.** ANV-20 was
+  the second caller and settled the question ANV-19 left open. An application-scoped, lifespan-owned
+  client is **not** the answer: an SDK client owns a connector bound to the loop that made it, so a
+  Celery prefork worker — the thing the sharing was meant to serve — inherits either a dead loop or
+  a forked socket two processes then read, and one shared pool makes one reset poison every request
+  until the process restarts. What *is* shareable is the expensive, loop-free factory beside it:
+  `aioboto3.Session` holds botocore's service-model cache, no socket and no loop, so it is an
+  `lru_cache`d process-wide singleton (`app.clients.s3.default_session`) while the client stays
+  per-request. **Split a client into "cache-like, loop-free" and "connection-owning, loop-bound"
+  and scope the halves differently** — that generalises; "hoist the client into the lifespan" does
+  not. A job that makes many calls buys the handshake back by holding **one** client for the whole
+  task (`async with S3Client(...)`), never by constructing one at import or at worker boot.
 
 ### `app/domain/` — Anvex business logic
 **Pure functions and pure classes.** This is where Anvex's actual rules live: watchlist reordering,
@@ -426,6 +457,15 @@ authorization is not data access.
 - **Constraint names:** `Base.metadata` carries a naming convention (`pk_` / `fk_` / `uq_` / `ix_` /
   `ck_`), so Postgres never invents a name Alembic cannot reproduce. Do not name constraints by
   hand unless one genuinely needs to differ.
+- **A service may translate exactly the client failures that are not failures.** `app/clients/` has
+  one exit and it is `ExternalServiceError` (→ 502), correctly: a client cannot know whether a
+  missing object is an outage or an ordinary absence. A *service* can, so `StorageService` turns
+  `details["reason"] == "object_not_found"` into `NotFoundError` and lets every other reason —
+  denied, throttled, unreachable, misconfigured — through untouched, because those genuinely are
+  "we are up, the upstream is not". The translation keys on the machine-readable `reason`, **never**
+  on the message: that is the whole reason ANV-17 put a reason in `details`, and a message match
+  breaks the first time a string is reworded. Translate the absence; never translate an outage into
+  a 404, which would tell a user their data is gone.
 - **Errors:** services raise from `app/domain/errors.py`; `app/middleware/errors.py` is the only
   place that maps them to HTTP. The mapping is the public contract: `AnvexError` → 500,
   `ValidationError` → 422, `UnauthorizedError` → 401, `ForbiddenError` → 403, `NotFoundError` → 404,
@@ -544,6 +584,12 @@ authorization is not data access.
   compares against the injected `now` itself). **A purity convention that lives only in prose gets
   broken:** each domain module's unit tests parse its source and fail on a clock call or a
   `fastapi`/`app.settings` import, the way `tests/unit/test_domain_auth.py` does.
+- **The clock rule is really an *ambient input* rule, and entropy is the other one.** A `uuid4()`
+  inside a domain function makes its output depend on something it was not given, exactly as a
+  `datetime.now()` does, so a uniqueness token is a required keyword argument too and the service
+  generates it beside the clock read. `app/domain/storage.export_key` is the worked example, and the
+  payoff is the same: a test asserts the *whole* key rather than a regex over the interesting half.
+  The purity sweep names `uuid4` alongside `now`.
 - **`app/utils/security.py` owns the bcrypt 72-byte boundary**, because it is the only layer that
   knows the encoding: the schema cap is 72 *characters* and bcrypt's limit is 72 *bytes*, so a
   25-character multibyte password passes validation and still overflows. `hash_password` **raises**
@@ -735,6 +781,10 @@ migrates `db-test`), `tests/helpers.py` (shared assertions and stubs), `tests/fa
 | `db_session` | function | **the usual one** — an `AsyncSession` whose writes are rolled back |
 | `db_app` / `db_client` | function | `app` / `client` with `deps.get_session` resolved to `db_session` |
 | `throwaway_database_url` | function | a brand-new empty database, dropped afterwards |
+| `minio_available` | session | skips unless the compose `minio` container answers |
+| `s3_bucket` | function | a brand-new bucket, emptied and dropped afterwards |
+| `s3_settings` | function | `Settings` pointed at host-side MinIO and that bucket |
+| `s3_client` | function | a real `S3Client` on the container, closed at teardown |
 
 - **What each tier may touch.** `tests/unit/` — nothing but fakes (no fixtures, no I/O).
   `tests/api/` —
@@ -748,6 +798,16 @@ migrates `db-test`), `tests/helpers.py` (shared assertions and stubs), `tests/fa
   the `db` marker, and the test skips with a reason when Postgres is unreachable; `-m "not db"`
   deselects the tier. So do not ask for `db_session` "just in case", and a `respx`-only test in
   `tests/integration/` keeps running with Docker stopped.
+- **A new container tier is three things, and it copies the database tier exactly.** A `tests/<x>.py`
+  module holding the connection details (its own test-only `BaseSettings` on the same repo-root
+  `.env`, a `@cache`d `unavailable_reason()` where *every* failure is a skip, and the create/drop
+  helpers), a `<X>_FIXTURES` frozenset in `conftest.py` that `pytest_collection_modifyitems` turns
+  into a marker, and fixtures that hand the test its **own** namespace. `tests/storage.py` is the
+  worked example: isolation is a throwaway bucket rather than a rolled-back transaction, because S3
+  has no transaction — but the shape, the skip and the "one number in `.env` moves both the compose
+  mapping and the client" rule are identical. Nothing in `app/` learns the tier exists.
+- **A tier that skips in both runs proves nothing**, so a ticket adding one reports the count that
+  actually executed with the container up (`-m <marker>`), not just that the suite was green.
 - **The harness migrates, it does not `create_all`.** `db_engine` runs `alembic upgrade head` once
   per session against `db-test`, which starts empty every time (tmpfs, no volume). Alembic's
   `env.py` honours `config.attributes["sqlalchemy.url"]` so the harness can point it at a specific

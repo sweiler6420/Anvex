@@ -12,11 +12,13 @@ The three tiers (``CLAUDE.md`` §6) and what each may touch:
 * ``tests/api/`` — route contracts through ``client``; the resource's ``get_x_service``
   redirected with ``app.dependency_overrides``. No database.
 * ``tests/integration/`` — repos and services against real Postgres via ``db_session``;
-  clients against mocked HTTP via ``mock_http``.
+  clients against mocked HTTP via ``mock_http``; the S3 client against the compose ``minio``
+  container via ``s3_client``.
 
 **Skipping is fixture-driven, not directory-driven.** Any test requesting one of the
 ``db_*`` fixtures is auto-marked ``db`` and skips with a reason when ``db-test`` does not
-answer; a ``respx``-only test in the same directory keeps running. That is what makes
+answer; the ``s3_*`` fixtures do the same with an ``s3`` marker and :mod:`tests.storage`. A
+``respx``-only test in the same directory keeps running. That is what makes
 ``uv run python -m pytest`` green on a machine with Docker stopped, as ``CLAUDE.md`` §6
 requires.
 """
@@ -34,10 +36,11 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.clients.s3 import S3Client
 from app.deps.session import get_session
 from app.main import create_app
 from app.settings import Settings
-from tests import database
+from tests import database, storage
 from tests.factories import reset_randomness
 
 #: Fixed origin used by the CORS assertions, so they never depend on the developer's
@@ -59,6 +62,10 @@ DATABASE_FIXTURES = frozenset(
     }
 )
 
+#: The same mechanism for object storage. Requesting any of these means the test needs the
+#: compose `minio` container, which becomes an `s3` marker and a skip when it is not there.
+STORAGE_FIXTURES = frozenset({"minio_available", "s3_bucket", "s3_settings", "s3_client"})
+
 
 # ---------------------------------------------------------------------------------------
 # Markers and collection
@@ -71,13 +78,21 @@ def pytest_configure(config: pytest.Config) -> None:
         "db: needs the compose `db-test` Postgres. Applied automatically to any test that "
         "requests a `db_*` fixture; such a test skips when the database is unreachable.",
     )
+    config.addinivalue_line(
+        "markers",
+        "s3: needs the compose `minio` container. Applied automatically to any test that "
+        "requests an `s3_*` fixture; such a test skips when MinIO is unreachable.",
+    )
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Mark every database-dependent test `db`, based on the fixtures it asked for."""
+    """Mark every container-dependent test, based on the fixtures it asked for."""
     for item in items:
-        if DATABASE_FIXTURES & set(getattr(item, "fixturenames", ())):
+        fixtures = set(getattr(item, "fixturenames", ()))
+        if DATABASE_FIXTURES & fixtures:
             item.add_marker("db")
+        if STORAGE_FIXTURES & fixtures:
+            item.add_marker("s3")
 
 
 # ---------------------------------------------------------------------------------------
@@ -290,3 +305,57 @@ def throwaway_database_url(database_available: None) -> Iterator[str]:
         yield database.database_url(name)
     finally:
         database.drop_database(name)
+
+
+# ---------------------------------------------------------------------------------------
+# Object storage
+# ---------------------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def minio_available() -> None:
+    """Skip the requesting test unless the compose ``minio`` container answers.
+
+    Probed once per session (:func:`tests.storage.unavailable_reason` is cached), so the
+    "Docker is stopped" path costs one refused connection for the whole run — the same deal
+    :func:`database_available` makes.
+    """
+    reason = storage.unavailable_reason()
+    if reason is not None:
+        pytest.skip(reason)
+
+
+@pytest.fixture
+def s3_bucket(minio_available: None) -> Iterator[str]:
+    """A brand-new bucket on the test MinIO, emptied and dropped afterwards.
+
+    The object-storage analogue of :func:`throwaway_database_url`, and the reason the S3 tier
+    needs no cleanup code of its own: isolation is a fresh bucket rather than a rollback,
+    because S3 has no transactions to roll back.
+    """
+    name = storage.unique_bucket_name()
+    storage.create_bucket(name)
+    try:
+        yield name
+    finally:
+        storage.drop_bucket(name)
+
+
+@pytest.fixture
+def s3_settings(s3_bucket: str) -> Settings:
+    """``Settings`` pointed at the host-side MinIO and this test's own bucket.
+
+    Deliberately **not** an override of the ``settings`` fixture: that one is pinned for the
+    API tests and has no business carrying an endpoint that only exists while Docker is up.
+    """
+    return storage.storage_settings(s3_bucket)
+
+
+@pytest.fixture
+async def s3_client(s3_settings: Settings) -> AsyncIterator[S3Client]:
+    """A real :class:`~app.clients.s3.S3Client` talking to the container, closed afterwards."""
+    client = S3Client(s3_settings)
+    try:
+        yield client
+    finally:
+        await client.aclose()
