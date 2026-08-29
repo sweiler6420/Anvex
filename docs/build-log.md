@@ -59,8 +59,9 @@ modified. What each contributes to Anvex:
 | ANV-7 | Models and initial migration | **Done** |
 | ANV-8 | Pydantic schemas | **Done** |
 | ANV-9 | Repositories | **Done** — *E2 Data layer complete* |
-| ANV-10 | Security utilities and pure token domain | Next |
-| ANV-11 … ANV-41 | see `backlog.md` | Not started |
+| ANV-10 | Security utilities and pure token domain | **Done** |
+| ANV-11 | Auth service, dependencies and routes | Next |
+| ANV-12 … ANV-41 | see `backlog.md` | Not started |
 
 ### ANV-1 — Done
 Commits `0ccc0df`, `9ae4224` on `main`.
@@ -445,3 +446,58 @@ everything.
 - Eager loading is a **separate method**, never a boolean flag. A test asserts the plain
   `list_for_stock` raises `MissingGreenlet` on `.stock` while the eager variant works, so the split
   cannot be mistaken for an oversight.
+
+### ANV-10 — Done
+Commit `4a5b2a8`, 8 files, 91 new tests, 100% coverage on both new modules. **Verified
+independently:** `384 passed / 192 skipped`, ruff clean, and I exercised the real thing —
+`hash_password` → `verify_password` round-trips, a wrong password and a garbage stored hash both
+return `False`.
+
+**The type check is enforced by signature shape, not by documentation.** There is no "just verify
+this token" entry point. `decode_token`'s `expected_type` is keyword-only **with no default**, so
+omitting it is a `TypeError` at the call site; the only other decoders name their type
+(`decode_access_token` / `decode_refresh_token`) and take no `expected_type` at all. `create_token`
+mirrors it, so a token cannot be minted without the claim that makes checking possible. Three tests
+hold this, including a sweep over `__all__` asserting every `decode*` export either requires
+`expected_type` or pins one. Expiry is checked *before* type, so an expired refresh token presented
+as an access token reads as expired.
+
+**bcrypt's 72-byte boundary: reject on hash, refuse on verify.** ANV-8's schema caps 72
+*characters* but bcrypt counts 72 *bytes*, so a 25-character multibyte password passes validation
+and still overflows — there is a test for exactly that (`"漢" * 25` = 75 bytes). Truncating would put
+a long passphrase and its own 72-byte prefix in the same equivalence class, invisibly. The asymmetry
+is deliberate: hashing is a write we control and should fail loudly before persisting; verifying
+takes attacker-controlled input and must never turn a login into a 500. `verify_password` catches
+`(ValueError, TypeError)` only — not bare `Exception` — so a `MissingBackendError` deployment fault
+stays loud instead of degrading every login to "wrong password".
+
+**Purity is enforced by AST inspection**, not prose: `TestPurity` parses `app/domain/auth.py` and
+asserts no `fastapi`/`starlette`/`sqlalchemy` import, no `app.settings`, `app.*` imports exactly
+`{app.domain.errors, app.schemas.auth}`, and no call to `now`/`utcnow`/`today`/`time`. Behaviourally
+tokens are minted and read at 1999 and 2099 clock values, so any wall-clock read would fail.
+`decode_token` passes `options={"verify_exp": False}` and compares itself — otherwise python-jose
+reads the wall clock on the module's behalf.
+
+**Dependency change:** `bcrypt` is pinned `>=4.0,<4.1`. **passlib 1.7.4 is its final release (2020)
+and cannot work with newer bcrypt** — it probes its backend by hashing a >72-byte secret, which
+bcrypt 5.0 turned into a `ValueError`, so `CryptContext(schemes=["bcrypt"])` raised before hashing
+anything; 4.1 separately dropped `bcrypt.__about__`, which passlib reads for the version. The pin is
+compatibility only — `security.py` enforces the byte boundary itself. **See the open question
+below.**
+
+**Carried into ANV-11:**
+1. **Read the clock exactly once per operation** in the service (`datetime.now(UTC)`) and pass that
+   one value down. Nothing below the service may call it. Unwrap `settings.jwt_secret_key` with
+   `.get_secret_value()` — the domain takes a plain `str`.
+2. **Login:** single-statement identifier lookup, then `verify_password`. On either miss raise a
+   bare `UnauthorizedError` — never one that distinguishes the arms.
+3. **Refresh:** `decode_refresh_token`, **re-read the user** (a deleted account must not keep
+   refreshing), then mint a new pair. An access token on this path now raises `WrongTokenTypeError`
+   — that is the fix, and it needs an API-tier test asserting the 401.
+4. `get_current_user` must use `decode_access_token`, never `decode_token` directly.
+5. Signup/password-change must catch `PasswordTooLongError` and translate it to
+   `domain.errors.ValidationError` — `app/utils/` cannot import `app/domain/`, so the service is the
+   translation point.
+6. New public error codes for the frontend: `invalid_token`, `token_expired`, `wrong_token_type`.
+   The client should refresh on `token_expired` and log out on the other two. No new
+   `ERROR_STATUS_CODES` entry is needed — all three inherit 401 through `UnauthorizedError`'s MRO.
