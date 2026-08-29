@@ -193,9 +193,7 @@ class FakeUserRepo:
         self, session: Any, email: str, *, exclude_user_id: uuid.UUID | None = None
     ) -> bool:
         self.calls.append(("email_exists", email))
-        return any(
-            user.email == email and user.user_id != exclude_user_id for user in self.users
-        )
+        return any(user.email == email and user.user_id != exclude_user_id for user in self.users)
 
     async def username_exists(
         self, session: Any, username: str, *, exclude_user_id: uuid.UUID | None = None
@@ -205,9 +203,7 @@ class FakeUserRepo:
             user.username == username and user.user_id != exclude_user_id for user in self.users
         )
 
-    async def create(
-        self, session: Any, *, username: str, email: str, password: str
-    ) -> User:
+    async def create(self, session: Any, *, username: str, email: str, password: str) -> User:
         """Insert an account. ``password`` is the **hash**, exactly as the real repo takes it."""
         self.calls.append(("create", username))
         if self.create_error is not None:
@@ -258,9 +254,7 @@ class FakeStockRepo:
     async def get_by_ticker(self, session: Any, ticker_symbol: str) -> Stock | None:
         """Exact match, casing included — see the class docstring."""
         self.calls.append(("get_by_ticker", ticker_symbol))
-        return next(
-            (stock for stock in self.stocks if stock.ticker_symbol == ticker_symbol), None
-        )
+        return next((stock for stock in self.stocks if stock.ticker_symbol == ticker_symbol), None)
 
     async def list_stocks(
         self,
@@ -270,16 +264,12 @@ class FakeStockRepo:
         limit: int,
         offset: int = 0,
     ) -> tuple[list[Stock], int]:
-        self.calls.append(
-            ("list_stocks", {"search": search, "limit": limit, "offset": offset})
-        )
+        self.calls.append(("list_stocks", {"search": search, "limit": limit, "offset": offset}))
         term = (search or "").strip().lower()
         matched = [
             stock
             for stock in self.stocks
-            if not term
-            or term in stock.ticker_symbol.lower()
-            or term in stock.company.lower()
+            if not term or term in stock.ticker_symbol.lower() or term in stock.company.lower()
         ]
         matched.sort(key=lambda stock: stock.ticker_symbol)
         # `total` counts every match and is taken *before* the window is applied.
@@ -421,9 +411,7 @@ class FakeWatchlistRepo:
             watchlist.entries = []
         return watchlist
 
-    async def get_with_entries(
-        self, session: Any, watchlist_id: uuid.UUID
-    ) -> Watchlist | None:
+    async def get_with_entries(self, session: Any, watchlist_id: uuid.UUID) -> Watchlist | None:
         self.calls.append(("get_with_entries", watchlist_id))
         watchlist = self._find(watchlist_id)
         if watchlist is None:
@@ -434,9 +422,7 @@ class FakeWatchlistRepo:
     async def list_for_user(
         self, session: Any, user_id: uuid.UUID, *, limit: int, offset: int = 0
     ) -> tuple[list[Watchlist], int]:
-        self.calls.append(
-            ("list_for_user", {"user_id": user_id, "limit": limit, "offset": offset})
-        )
+        self.calls.append(("list_for_user", {"user_id": user_id, "limit": limit, "offset": offset}))
         matched = [row for row in self.watchlists if row.user_id == user_id]
         matched.sort(key=lambda row: (row.title, row.watchlist_id))
         # `total` counts every match and is taken *before* the window is applied.
@@ -466,9 +452,7 @@ class FakeWatchlistRepo:
         self.calls.append(("entry_exists", (watchlist_id, stock_id)))
         return self._entry(watchlist_id, stock_id) is not None
 
-    async def list_entries(
-        self, session: Any, watchlist_id: uuid.UUID
-    ) -> list[WatchlistData]:
+    async def list_entries(self, session: Any, watchlist_id: uuid.UUID) -> list[WatchlistData]:
         self.calls.append(("list_entries", watchlist_id))
         return self._ordered(watchlist_id)
 
@@ -537,13 +521,9 @@ class FakeWatchlistRepo:
     # -- internals ----------------------------------------------------------------------
 
     def _find(self, watchlist_id: uuid.UUID) -> Watchlist | None:
-        return next(
-            (row for row in self.watchlists if row.watchlist_id == watchlist_id), None
-        )
+        return next((row for row in self.watchlists if row.watchlist_id == watchlist_id), None)
 
-    def _entry(
-        self, watchlist_id: uuid.UUID, stock_id: uuid.UUID
-    ) -> WatchlistData | None:
+    def _entry(self, watchlist_id: uuid.UUID, stock_id: uuid.UUID) -> WatchlistData | None:
         return next(
             (
                 entry
@@ -574,9 +554,7 @@ def make_watchlist(
     reason the factory requires a parent: a watchlist with an invented owner is a watchlist
     no ownership test can reason about.
     """
-    return Watchlist(
-        watchlist_id=watchlist_id or uuid.uuid4(), user_id=user_id, title=title
-    )
+    return Watchlist(watchlist_id=watchlist_id or uuid.uuid4(), user_id=user_id, title=title)
 
 
 def make_entry(*, watchlist_id: uuid.UUID, stock: Stock, position: int) -> WatchlistData:

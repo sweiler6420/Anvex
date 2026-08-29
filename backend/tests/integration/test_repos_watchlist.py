@@ -127,9 +127,7 @@ class TestWatchlists:
 
 
 class TestTheOrderedJoin:
-    async def test_get_with_entries_returns_position_order(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_get_with_entries_returns_position_order(self, db_session: AsyncSession) -> None:
         """Inserted 2, 0, 1 — read back 0, 1, 2, without the caller sorting anything."""
         _, watchlist, _ = await _watchlist_with_entries(db_session)
         db_session.expunge_all()
@@ -139,9 +137,7 @@ class TestTheOrderedJoin:
         assert found is not None
         assert [entry.position for entry in found.entries] == [0, 1, 2]
 
-    async def test_get_with_entries_eager_loads_each_stock(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_get_with_entries_eager_loads_each_stock(self, db_session: AsyncSession) -> None:
         """`WatchlistDetailOut` reads `entry.stock`; a lazy load would raise under asyncio."""
         user = await UserFactory().create(db_session)
         watchlist = await WatchlistFactory().create(db_session, user=user)
@@ -177,9 +173,7 @@ class TestTheOrderedJoin:
         assert found is not None
         assert found.entries == []
 
-    async def test_list_entries_is_also_position_ordered(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_list_entries_is_also_position_ordered(self, db_session: AsyncSession) -> None:
         _, watchlist, _ = await _watchlist_with_entries(db_session)
         db_session.expunge_all()
 
@@ -220,9 +214,7 @@ class TestEntries:
         stock = await StockFactory().create(db_session)
         first = await WatchlistFactory().create(db_session, user=user)
         second = await WatchlistFactory().create(db_session, user=user)
-        await WatchlistDataFactory().create(
-            db_session, watchlist=first, stock=stock, position=0
-        )
+        await WatchlistDataFactory().create(db_session, watchlist=first, stock=stock, position=0)
 
         assert await repo.entry_exists(db_session, first.watchlist_id, stock.stock_id)
         assert not await repo.entry_exists(db_session, second.watchlist_id, stock.stock_id)
@@ -256,9 +248,7 @@ class TestEntries:
     async def test_remove_entry_reports_what_it_removed(self, db_session: AsyncSession) -> None:
         _, watchlist, stocks = await _watchlist_with_entries(db_session)
 
-        removed = await repo.remove_entry(
-            db_session, watchlist.watchlist_id, stocks[0].stock_id
-        )
+        removed = await repo.remove_entry(db_session, watchlist.watchlist_id, stocks[0].stock_id)
 
         assert removed is True
         assert await repo.count_entries(db_session, watchlist.watchlist_id) == 2
@@ -301,9 +291,7 @@ class TestRepositioning:
     async def test_set_position_moves_one_entry(self, db_session: AsyncSession) -> None:
         _, watchlist, stocks = await _watchlist_with_entries(db_session)
 
-        moved = await repo.set_position(
-            db_session, watchlist.watchlist_id, stocks[0].stock_id, 5
-        )
+        moved = await repo.set_position(db_session, watchlist.watchlist_id, stocks[0].stock_id, 5)
 
         assert moved is not None
         assert moved.position == 5
@@ -320,9 +308,7 @@ class TestRepositioning:
 
         assert moved is None
 
-    async def test_set_positions_applies_a_whole_reorder(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_set_positions_applies_a_whole_reorder(self, db_session: AsyncSession) -> None:
         """The write half of ANV-15: the pure rule computes the map, this applies it."""
         _, watchlist, stocks = await _watchlist_with_entries(db_session, positions=(0, 1, 2))
 

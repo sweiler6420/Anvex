@@ -39,9 +39,7 @@ class UserRepo(BaseRepo[User]):
         """The account with this username, or ``None``."""
         return await self._one_or_none(session, select(User).where(User.username == username))
 
-    async def get_by_email_or_username(
-        self, session: AsyncSession, identifier: str
-    ) -> User | None:
+    async def get_by_email_or_username(self, session: AsyncSession, identifier: str) -> User | None:
         """**The login lookup.** One query matching ``identifier`` against *either* column.
 
         The old API's ``/v1/login`` accepted an email address or a username in
@@ -58,9 +56,7 @@ class UserRepo(BaseRepo[User]):
             select(User).where(or_(User.email == identifier, User.username == identifier)),
         )
 
-    async def get_with_watchlists(
-        self, session: AsyncSession, user_id: uuid.UUID
-    ) -> User | None:
+    async def get_with_watchlists(self, session: AsyncSession, user_id: uuid.UUID) -> User | None:
         """The account with every watchlist, entry and stock eagerly loaded.
 
         The full ``user -> watchlists -> entries -> stock`` chain from

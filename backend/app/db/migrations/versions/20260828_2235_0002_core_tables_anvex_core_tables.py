@@ -90,9 +90,7 @@ def upgrade() -> None:
         sa.UniqueConstraint("ticker_symbol", name=op.f("uq_stocks_ticker_symbol")),
         schema=SCHEMA,
     )
-    op.create_index(
-        op.f("ix_stocks_company"), "stocks", ["company"], unique=False, schema=SCHEMA
-    )
+    op.create_index(op.f("ix_stocks_company"), "stocks", ["company"], unique=False, schema=SCHEMA)
 
     op.create_table(
         "stock_data",
@@ -121,9 +119,7 @@ def upgrade() -> None:
     )
     # Cross-stock date windows cannot use the constraint above — `date` is not its
     # leading column.
-    op.create_index(
-        op.f("ix_stock_data_date"), "stock_data", ["date"], unique=False, schema=SCHEMA
-    )
+    op.create_index(op.f("ix_stock_data_date"), "stock_data", ["date"], unique=False, schema=SCHEMA)
 
     op.create_table(
         "watchlists",

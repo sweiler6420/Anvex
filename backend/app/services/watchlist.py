@@ -160,9 +160,7 @@ class WatchlistService:
             offset=window.offset,
         )
 
-    async def get_watchlist(
-        self, *, watchlist_id: uuid.UUID, owner: User
-    ) -> WatchlistDetailOut:
+    async def get_watchlist(self, *, watchlist_id: uuid.UUID, owner: User) -> WatchlistDetailOut:
         """One of ``owner``'s watchlists, with its stocks already in ``position`` order.
 
         The ordering is the relationship's (``order_by="WatchlistData.position"``), so
@@ -252,9 +250,7 @@ class WatchlistService:
             await self.session.rollback()
             if ENTRY_PRIMARY_KEY not in self._constraint_hint(exc):
                 raise
-            logger.warning(
-                "watchlists.add_stock_lost_the_race", watchlist_id=str(watchlist_id)
-            )
+            logger.warning("watchlists.add_stock_lost_the_race", watchlist_id=str(watchlist_id))
             raise self._duplicate(data.stock_id) from exc
 
         logger.info(

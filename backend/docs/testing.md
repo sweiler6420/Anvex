@@ -148,7 +148,7 @@ asserts on a fresh connection that nothing survived.
 the model group it builds. Read `tests/factories/base.py`; the pattern is in its docstring.
 
 ```python
-user = await UserFactory().create(db_session)            # added + flushed, not committed
+user = await UserFactory().create(db_session)  # added + flushed, not committed
 draft = UserFactory().build(email="pinned@example.com")  # in memory only
 ```
 

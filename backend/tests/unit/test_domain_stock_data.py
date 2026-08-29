@@ -245,9 +245,7 @@ class TestDateRangeLabel:
 
 class TestResolveDateRange:
     def test_a_coherent_range_passes_through(self) -> None:
-        assert resolve_date_range(start=MONDAY, end=FRIDAY) == DateRange(
-            start=MONDAY, end=FRIDAY
-        )
+        assert resolve_date_range(start=MONDAY, end=FRIDAY) == DateRange(start=MONDAY, end=FRIDAY)
 
     def test_no_bounds_at_all_is_valid(self) -> None:
         assert resolve_date_range() == DateRange()

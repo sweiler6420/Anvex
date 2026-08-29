@@ -181,9 +181,7 @@ class TestBuildClaims:
     @pytest.mark.parametrize("lifetime", [timedelta(0), timedelta(seconds=-1), -ACCESS_LIFETIME])
     def test_a_non_positive_lifetime_is_refused(self, lifetime: timedelta) -> None:
         with pytest.raises(ValueError, match="positive"):
-            build_claims(
-                subject=SUBJECT, token_type=ACCESS_TOKEN_TYPE, now=NOW, lifetime=lifetime
-            )
+            build_claims(subject=SUBJECT, token_type=ACCESS_TOKEN_TYPE, now=NOW, lifetime=lifetime)
 
     def test_claims_are_deterministic(self) -> None:
         first = build_claims(

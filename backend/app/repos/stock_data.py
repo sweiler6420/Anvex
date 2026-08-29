@@ -191,9 +191,7 @@ class StockDataRepo(BaseRepo[StockData]):
     # Bulk write
     # -----------------------------------------------------------------------------------
 
-    async def bulk_upsert(
-        self, session: AsyncSession, rows: Iterable[Mapping[str, Any]]
-    ) -> int:
+    async def bulk_upsert(self, session: AsyncSession, rows: Iterable[Mapping[str, Any]]) -> int:
         """Insert or update many candles in **one** statement; returns rows written.
 
         ``INSERT ... ON CONFLICT (stock_id, date, time) DO UPDATE``. That conflict target

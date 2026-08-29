@@ -67,9 +67,7 @@ class TestSettingsOverride:
     def settings(self, settings: Settings) -> Settings:
         return settings.model_copy(update={"api_cors_origins": "http://pinned.example"})
 
-    async def test_the_app_is_built_from_the_overridden_settings(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_the_app_is_built_from_the_overridden_settings(self, client: AsyncClient) -> None:
         response = await client.get("/health", headers={"Origin": "http://pinned.example"})
         assert response.headers["access-control-allow-origin"] == "http://pinned.example"
 

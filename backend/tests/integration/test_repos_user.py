@@ -28,9 +28,7 @@ class TestLookups:
         assert found is not None
         assert found.user_id == user.user_id
 
-    async def test_get_by_id_returns_none_for_an_unknown_id(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_get_by_id_returns_none_for_an_unknown_id(self, db_session: AsyncSession) -> None:
         assert await repo.get_by_id(db_session, uuid.uuid4()) is None
 
     async def test_get_by_email_and_get_by_username(self, db_session: AsyncSession) -> None:
@@ -72,9 +70,7 @@ class TestLoginLookup:
         assert found is not None
         assert found.user_id == user.user_id
 
-    async def test_both_identifiers_resolve_to_the_same_row(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_both_identifiers_resolve_to_the_same_row(self, db_session: AsyncSession) -> None:
         """The behaviour preserved from the old API, stated as one assertion."""
         user = await UserFactory().create(db_session)
 
@@ -161,7 +157,7 @@ class TestUniqueness:
     async def test_excluding_the_owner_makes_the_check_usable_on_an_update(
         self, db_session: AsyncSession
     ) -> None:
-        """"Taken by somebody else" — otherwise a profile save conflicts with itself."""
+        """ "Taken by somebody else" — otherwise a profile save conflicts with itself."""
         user = await UserFactory().create(db_session)
 
         assert (
@@ -217,9 +213,7 @@ class TestWrites:
                 db_session, username="different", email=existing.email, password="hash"
             )
 
-    async def test_update_applies_only_the_keys_it_is_given(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_update_applies_only_the_keys_it_is_given(self, db_session: AsyncSession) -> None:
         user = await UserFactory().create(db_session)
         original_email = user.email
 

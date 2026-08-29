@@ -129,9 +129,7 @@ class TestLogin:
     async def test_valid_credentials_return_the_pair_the_frontend_parses(
         self, client: AsyncClient
     ) -> None:
-        response = await client.post(
-            LOGIN_URL, data={"username": USERNAME, "password": PASSWORD}
-        )
+        response = await client.post(LOGIN_URL, data={"username": USERNAME, "password": PASSWORD})
 
         assert response.status_code == 200
         body = response.json()
@@ -139,9 +137,7 @@ class TestLogin:
         assert body["token_type"] == "bearer"
         assert body["access_token"] and body["refresh_token"]
 
-    async def test_an_email_address_works_in_the_username_field(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_an_email_address_works_in_the_username_field(self, client: AsyncClient) -> None:
         """Preserved from the old API, which resolved either with a single `OR`."""
         response = await client.post(LOGIN_URL, data={"username": EMAIL, "password": PASSWORD})
 
@@ -159,9 +155,7 @@ class TestLogin:
         assert response.json() == {"user_id": str(account.user_id)}
 
     async def test_an_unknown_identifier_is_a_401(self, client: AsyncClient) -> None:
-        response = await client.post(
-            LOGIN_URL, data={"username": "nobody", "password": PASSWORD}
-        )
+        response = await client.post(LOGIN_URL, data={"username": "nobody", "password": PASSWORD})
 
         assert_error_envelope(response, status=401, code="unauthorized")
 
@@ -361,9 +355,7 @@ class TestRecovery:
         assert response.status_code == 202
         assert response.json() == {"status": "accepted", "message": RECOVERY_MESSAGE}
 
-    async def test_an_unknown_account_gets_the_identical_answer(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_an_unknown_account_gets_the_identical_answer(self, client: AsyncClient) -> None:
         """The old endpoint answered 404 `"User not found with username: <x>"`.
 
         That made password recovery a free username-enumeration API. Status **and** body
@@ -381,7 +373,7 @@ class TestRecovery:
         assert "no-such-person" not in response.text
 
     async def test_recovery_needs_no_credentials(self, client: AsyncClient) -> None:
-        """"I have forgotten my password" cannot require being signed in."""
+        """ "I have forgotten my password" cannot require being signed in."""
         response = await client.post(RECOVERY_URL, json={"username": USERNAME})
 
         assert response.status_code == 202

@@ -306,9 +306,7 @@ class TestPasswordNeverEscapes:
                 assert leaking == [], f"{name} would serialise {leaking}"
 
     @pytest.mark.parametrize("schema", ORM_OUTPUT_SCHEMAS, ids=lambda s: s.__name__)
-    def test_no_orm_output_schema_can_be_given_a_password(
-        self, schema: type[BaseModel]
-    ) -> None:
+    def test_no_orm_output_schema_can_be_given_a_password(self, schema: type[BaseModel]) -> None:
         """Even by name: pydantic ignores unknown keys, so the field must simply not exist."""
         assert "password" not in schema.model_fields
 

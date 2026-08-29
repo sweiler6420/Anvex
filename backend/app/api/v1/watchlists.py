@@ -111,8 +111,7 @@ INVALID_POSITION_RESPONSE = {
     422: {
         "model": ErrorResponse,
         "description": (
-            "`validation_error` — `position` falls outside the watchlist, or the body is "
-            "malformed."
+            "`validation_error` — `position` falls outside the watchlist, or the body is malformed."
         ),
     }
 }

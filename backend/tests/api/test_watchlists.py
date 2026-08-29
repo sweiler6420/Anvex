@@ -124,9 +124,7 @@ def watchlists(
         make_entry(watchlist_id=watchlist.watchlist_id, stock=stock, position=n)
         for n, stock in enumerate(catalogue[:3])
     ]
-    return FakeWatchlistRepo(
-        watchlist, empty_watchlist, hers, entries=entries, catalogue=catalogue
-    )
+    return FakeWatchlistRepo(watchlist, empty_watchlist, hers, entries=entries, catalogue=catalogue)
 
 
 @pytest.fixture
@@ -216,9 +214,7 @@ class TestAuthenticationIsRequired:
     async def test_every_route_refuses_an_anonymous_caller(
         self, client: AsyncClient, watchlist: Any, catalogue: list[Any]
     ) -> None:
-        for method, url in self.every_route(
-            watchlist.watchlist_id, catalogue[0].stock_id
-        ):
+        for method, url in self.every_route(watchlist.watchlist_id, catalogue[0].stock_id):
             response = await client.request(method, url, json={})
 
             assert_error_envelope(response, status=401, code="unauthorized")
@@ -227,9 +223,7 @@ class TestAuthenticationIsRequired:
     async def test_every_route_refuses_a_garbage_token(
         self, client: AsyncClient, watchlist: Any, catalogue: list[Any]
     ) -> None:
-        for method, url in self.every_route(
-            watchlist.watchlist_id, catalogue[0].stock_id
-        ):
+        for method, url in self.every_route(watchlist.watchlist_id, catalogue[0].stock_id):
             response = await client.request(
                 method, url, json={}, headers={"Authorization": "Bearer nonsense"}
             )
@@ -248,9 +242,7 @@ class TestAuthenticationIsRequired:
             algorithm=ALGORITHM,
         )
 
-        response = await client.get(
-            detail_url, headers={"Authorization": f"Bearer {refresh}"}
-        )
+        response = await client.get(detail_url, headers={"Authorization": f"Bearer {refresh}"})
 
         assert_error_envelope(response, status=401, code="wrong_token_type")
 
@@ -280,9 +272,7 @@ class TestOwnershipIsolation:
     """Mallory, holding a perfectly valid token of her own, against Stephen's watchlist."""
 
     @staticmethod
-    def requests(
-        watchlist_id: uuid.UUID, catalogue: list[Any]
-    ) -> dict[str, tuple[str, str, Any]]:
+    def requests(watchlist_id: uuid.UUID, catalogue: list[Any]) -> dict[str, tuple[str, str, Any]]:
         """``name -> (method, url, json body or None)`` for every route taking an id.
 
         Two securities are needed, not one: the add route wants a stock that is **not** yet
@@ -345,9 +335,9 @@ class TestOwnershipIsolation:
         assert theirs["details"]["resource"] == nobodys["details"]["resource"]
         assert set(theirs["details"]) == set(nobodys["details"])
         # The message differs only where the caller's own id is echoed back into it.
-        assert theirs["message"].replace(
-            str(watchlist.watchlist_id), ""
-        ) == nobodys["message"].replace(str(MISSING), "")
+        assert theirs["message"].replace(str(watchlist.watchlist_id), "") == nobodys[
+            "message"
+        ].replace(str(MISSING), "")
 
     @pytest.mark.parametrize("name", NAMES)
     async def test_the_refusal_changes_nothing(
@@ -391,9 +381,7 @@ class TestOwnershipIsolation:
 
         assert response.status_code == 200
         payload = response.json()
-        assert [row["watchlist_id"] for row in payload["items"]] == [
-            str(hers.watchlist_id)
-        ]
+        assert [row["watchlist_id"] for row in payload["items"]] == [str(hers.watchlist_id)]
         assert payload["total"] == 1
 
 
@@ -406,9 +394,7 @@ class TestCreate:
     async def test_it_answers_201_with_the_new_watchlist(
         self, client: AsyncClient, auth: dict[str, str], stephen: Any
     ) -> None:
-        response = await client.post(
-            WATCHLISTS_URL, json={"title": "Semis"}, headers=auth
-        )
+        response = await client.post(WATCHLISTS_URL, json={"title": "Semis"}, headers=auth)
 
         assert response.status_code == 201
         payload = response.json()
@@ -435,9 +421,7 @@ class TestCreate:
 
         assert response.json()["user_id"] == str(stephen.user_id)
 
-    async def test_a_blank_title_is_a_422(
-        self, client: AsyncClient, auth: dict[str, str]
-    ) -> None:
+    async def test_a_blank_title_is_a_422(self, client: AsyncClient, auth: dict[str, str]) -> None:
         response = await client.post(WATCHLISTS_URL, json={"title": ""}, headers=auth)
 
         assert_error_envelope(response, status=422, code="validation_error")
@@ -477,9 +461,7 @@ class TestList:
     async def test_a_negative_offset_is_refused_at_the_edge(
         self, client: AsyncClient, auth: dict[str, str]
     ) -> None:
-        response = await client.get(
-            WATCHLISTS_URL, params={"offset": -1}, headers=auth
-        )
+        response = await client.get(WATCHLISTS_URL, params={"offset": -1}, headers=auth)
 
         assert_error_envelope(response, status=422, code="validation_error")
 
@@ -658,9 +640,7 @@ class TestRemoveStock:
     async def test_it_answers_204_and_closes_the_gap(
         self, client: AsyncClient, auth: dict[str, str], detail_url: str, catalogue: list[Any]
     ) -> None:
-        response = await client.delete(
-            f"{detail_url}/stocks/{catalogue[1].stock_id}", headers=auth
-        )
+        response = await client.delete(f"{detail_url}/stocks/{catalogue[1].stock_id}", headers=auth)
 
         assert (response.status_code, response.content) == (204, b"")
         payload = (await client.get(detail_url, headers=auth)).json()
@@ -670,9 +650,7 @@ class TestRemoveStock:
     async def test_a_stock_not_on_the_list_is_a_404_naming_the_entry(
         self, client: AsyncClient, auth: dict[str, str], detail_url: str, catalogue: list[Any]
     ) -> None:
-        response = await client.delete(
-            f"{detail_url}/stocks/{catalogue[3].stock_id}", headers=auth
-        )
+        response = await client.delete(f"{detail_url}/stocks/{catalogue[3].stock_id}", headers=auth)
 
         error = assert_error_envelope(response, status=404, code="not_found")
         assert error["details"]["resource"] == "watchlist entry"
@@ -813,9 +791,7 @@ async def test_create_fill_rearrange_and_delete(
     )
     assert tickers(moved.json()) == ["TSLA", "AAPL", "NVDA"]
 
-    removed = await client.delete(
-        f"{url}/stocks/{catalogue[1].stock_id}", headers=auth
-    )
+    removed = await client.delete(f"{url}/stocks/{catalogue[1].stock_id}", headers=auth)
     assert removed.status_code == 204
     final = (await client.get(url, headers=auth)).json()
     assert tickers(final) == ["TSLA", "AAPL"]

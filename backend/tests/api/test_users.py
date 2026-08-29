@@ -85,9 +85,7 @@ def session() -> StubSession:
 
 
 @pytest.fixture
-def app(
-    app: FastAPI, settings: Settings, users: FakeUserRepo, session: StubSession
-) -> FastAPI:
+def app(app: FastAPI, settings: Settings, users: FakeUserRepo, session: StubSession) -> FastAPI:
     """The application with both services backed by one in-memory repo.
 
     Auth is overridden as well as users because ``/me`` and ``/{user_id}`` sit behind
@@ -142,9 +140,7 @@ class TestRegister:
         assert body["email"] == "new.person@example.com"
         uuid.UUID(body["user_id"])
 
-    async def test_the_response_carries_no_password_of_any_kind(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_the_response_carries_no_password_of_any_kind(self, client: AsyncClient) -> None:
         """Neither the field, nor the plaintext, nor the digest that replaced it."""
         response = await client.post(USERS_URL, json=new_registration())
 
@@ -159,9 +155,7 @@ class TestRegister:
         assert response.status_code == 201
 
     async def test_a_duplicate_email_is_a_409(self, client: AsyncClient) -> None:
-        response = await client.post(
-            USERS_URL, json=new_registration(email=EMAIL)
-        )
+        response = await client.post(USERS_URL, json=new_registration(email=EMAIL))
 
         error = assert_error_envelope(response, status=409, code="conflict")
         assert error["message"] == EMAIL_TAKEN_MESSAGE
@@ -204,9 +198,7 @@ class TestRegister:
         the translation it escapes as a bare ``ValueError`` and the caller gets a 500 for
         input the API should simply have refused.
         """
-        response = await client.post(
-            USERS_URL, json=new_registration(password=MULTIBYTE_PASSWORD)
-        )
+        response = await client.post(USERS_URL, json=new_registration(password=MULTIBYTE_PASSWORD))
 
         error = assert_error_envelope(response, status=422, code="validation_error")
         assert error["details"]["field"] == "password"
@@ -235,9 +227,7 @@ class TestCurrentUser:
         assert body["username"] == USERNAME
         assert body["email"] == EMAIL
 
-    async def test_me_never_returns_a_password(
-        self, client: AsyncClient, account: Any
-    ) -> None:
+    async def test_me_never_returns_a_password(self, client: AsyncClient, account: Any) -> None:
         response = await client.get(ME_URL, headers=bearer(account.user_id))
 
         assert "password" not in response.json()
@@ -258,9 +248,7 @@ class TestCurrentUser:
 
         assert_error_envelope(response, status=401, code="unauthorized")
 
-    async def test_me_is_not_parsed_as_a_user_id(
-        self, client: AsyncClient, account: Any
-    ) -> None:
+    async def test_me_is_not_parsed_as_a_user_id(self, client: AsyncClient, account: Any) -> None:
         """Declaration order matters: with `/{user_id}` first, "me" would be a 422."""
         response = await client.get(ME_URL, headers=bearer(account.user_id))
 
@@ -273,9 +261,7 @@ class TestCurrentUser:
 
 
 class TestReadUserById:
-    async def test_an_anonymous_caller_is_refused(
-        self, client: AsyncClient, account: Any
-    ) -> None:
+    async def test_an_anonymous_caller_is_refused(self, client: AsyncClient, account: Any) -> None:
         response = await client.get(f"{USERS_URL}/{account.user_id}")
 
         assert_error_envelope(response, status=401, code="unauthorized")
@@ -304,9 +290,7 @@ class TestReadUserById:
         authenticated caller, on an API where anybody can register a token."""
         other = users.add(make_user(username="otherperson", email="other@example.com"))
 
-        response = await client.get(
-            f"{USERS_URL}/{other.user_id}", headers=bearer(account.user_id)
-        )
+        response = await client.get(f"{USERS_URL}/{other.user_id}", headers=bearer(account.user_id))
 
         assert_error_envelope(response, status=404, code="not_found")
         assert "other@example.com" not in response.text
@@ -318,9 +302,7 @@ class TestReadUserById:
         other = users.add(make_user(username="otherperson", email="other@example.com"))
         nobody = uuid.uuid4()
 
-        stranger = await client.get(
-            f"{USERS_URL}/{other.user_id}", headers=bearer(account.user_id)
-        )
+        stranger = await client.get(f"{USERS_URL}/{other.user_id}", headers=bearer(account.user_id))
         ghost = await client.get(f"{USERS_URL}/{nobody}", headers=bearer(account.user_id))
 
         assert stranger.status_code == ghost.status_code == 404
@@ -334,9 +316,7 @@ class TestReadUserById:
         ].replace(str(nobody), "?")
 
     async def test_a_non_uuid_id_is_a_422(self, client: AsyncClient, account: Any) -> None:
-        response = await client.get(
-            f"{USERS_URL}/not-a-uuid", headers=bearer(account.user_id)
-        )
+        response = await client.get(f"{USERS_URL}/not-a-uuid", headers=bearer(account.user_id))
 
         assert_error_envelope(response, status=422, code="validation_error")
 
@@ -359,9 +339,7 @@ class TestRegisterThenSignIn:
         registered = await client.post(USERS_URL, json=new_registration())
         assert registered.status_code == 201
 
-        login = await client.post(
-            LOGIN_URL, data={"username": "newperson", "password": PASSWORD}
-        )
+        login = await client.post(LOGIN_URL, data={"username": "newperson", "password": PASSWORD})
         assert login.status_code == 200
         token = login.json()["access_token"]
 
@@ -387,9 +365,7 @@ class TestRegisterThenSignIn:
     ) -> None:
         await client.post(USERS_URL, json=new_registration(password="a-different-one"))
 
-        login = await client.post(
-            LOGIN_URL, data={"username": "newperson", "password": PASSWORD}
-        )
+        login = await client.post(LOGIN_URL, data={"username": "newperson", "password": PASSWORD})
 
         assert_error_envelope(login, status=401, code="unauthorized")
 
@@ -431,10 +407,7 @@ class TestRouterWiring:
         schemes = document["components"]["securitySchemes"]
         assert "OAuth2PasswordBearer" in schemes
         assert schemes["OAuth2PasswordBearer"]["type"] == "oauth2"
-        assert (
-            schemes["OAuth2PasswordBearer"]["flows"]["password"]["tokenUrl"]
-            == "v1/auth/login"
-        )
+        assert schemes["OAuth2PasswordBearer"]["flows"]["password"]["tokenUrl"] == "v1/auth/login"
 
     def test_the_guarded_routes_declare_security_and_the_public_one_does_not(
         self, app: FastAPI

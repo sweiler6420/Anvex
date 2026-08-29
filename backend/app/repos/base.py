@@ -127,9 +127,7 @@ class BaseRepo[ModelT]:
         result = await session.scalars(stmt.limit(1))
         return result.first()
 
-    async def _all(
-        self, session: AsyncSession, stmt: Select[tuple[ModelT]]
-    ) -> list[ModelT]:
+    async def _all(self, session: AsyncSession, stmt: Select[tuple[ModelT]]) -> list[ModelT]:
         """Every row of ``stmt`` as a list of models."""
         result = await session.scalars(stmt)
         return list(result.unique())

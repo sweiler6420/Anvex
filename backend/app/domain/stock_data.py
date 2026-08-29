@@ -91,12 +91,12 @@ class DateRange:
 
     @property
     def is_open_started(self) -> bool:
-        """"Everything up to ``end``" — however far back the series goes."""
+        """ "Everything up to ``end``" — however far back the series goes."""
         return self.start is None
 
     @property
     def is_open_ended(self) -> bool:
-        """"Everything from ``start``" — including candles not ingested yet."""
+        """ "Everything from ``start``" — including candles not ingested yet."""
         return self.end is None
 
     @property
@@ -154,9 +154,7 @@ class CandleQuery:
     window: PageWindow
 
 
-def resolve_date_range(
-    *, start: dt.date | None = None, end: dt.date | None = None
-) -> DateRange:
+def resolve_date_range(*, start: dt.date | None = None, end: dt.date | None = None) -> DateRange:
     """Validate and build the inclusive range the caller described.
 
     :raises ValidationError: ``start`` falls after ``end``. That range describes no day, so
@@ -169,8 +167,7 @@ def resolve_date_range(
 
     if start is not None and end is not None and start > end:
         raise ValidationError(
-            f"The date range starting {start.isoformat()} ends earlier, "
-            f"on {end.isoformat()}.",
+            f"The date range starting {start.isoformat()} ends earlier, on {end.isoformat()}.",
             field=RANGE_FIELD,
             details={"start": start.isoformat(), "end": end.isoformat()},
         )

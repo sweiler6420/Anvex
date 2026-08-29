@@ -90,9 +90,7 @@ async def stocks(db_session: AsyncSession) -> dict[str, Stock]:
 
 
 @pytest.fixture
-async def watchlist(
-    db_session: AsyncSession, owner: User, stocks: dict[str, Stock]
-) -> Watchlist:
+async def watchlist(db_session: AsyncSession, owner: User, stocks: dict[str, Stock]) -> Watchlist:
     """Four stocks, **inserted in an order that is nothing like their positions**.
 
     So a service or a schema that happened to return the rows in insertion order — the
@@ -113,9 +111,7 @@ async def empty(db_session: AsyncSession, owner: User) -> Watchlist:
     return await WatchlistFactory().create(db_session, user=owner, title="Later")
 
 
-async def stored_positions(
-    session: AsyncSession, watchlist_id: uuid.UUID
-) -> list[tuple[str, int]]:
+async def stored_positions(session: AsyncSession, watchlist_id: uuid.UUID) -> list[tuple[str, int]]:
     """``(ticker, position)`` straight out of Postgres, in ``position`` order.
 
     A Core ``SELECT`` of two columns, deliberately: the rows come back as plain values off
@@ -449,14 +445,10 @@ class TestDelete:
         )
 
         remaining = await db_session.execute(
-            select(WatchlistData).where(
-                WatchlistData.watchlist_id == watchlist.watchlist_id
-            )
+            select(WatchlistData).where(WatchlistData.watchlist_id == watchlist.watchlist_id)
         )
         assert remaining.scalars().all() == []
-        assert (
-            await db_session.get(Watchlist, watchlist.watchlist_id)
-        ) is None
+        assert (await db_session.get(Watchlist, watchlist.watchlist_id)) is None
 
     async def test_the_securities_themselves_survive(
         self, db_session: AsyncSession, owner: User, watchlist: Watchlist, stocks: dict[str, Stock]
@@ -537,9 +529,7 @@ class TestOwnershipAgainstRealSql:
 async def test_a_created_watchlist_belongs_to_its_creator(
     db_session: AsyncSession, owner: User
 ) -> None:
-    created = await build_service(db_session).create(
-        WatchlistCreate(title="Fresh"), owner=owner
-    )
+    created = await build_service(db_session).create(WatchlistCreate(title="Fresh"), owner=owner)
 
     stored = await db_session.get(Watchlist, created.watchlist_id)
     assert stored is not None and stored.user_id == owner.user_id

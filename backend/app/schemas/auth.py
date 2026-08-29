@@ -42,9 +42,7 @@ TOKEN_TYPE = "bearer"
 #: The single sentence ``POST /v1/auth/recovery`` returns, for every request. Deliberately
 #: phrased in the conditional — it makes no claim about whether an account was found, and
 #: no claim that anything has actually been sent.
-RECOVERY_MESSAGE = (
-    "If an account matches that username, a password reset will be arranged for it."
-)
+RECOVERY_MESSAGE = "If an account matches that username, a password reset will be arranged for it."
 
 
 class TokenPair(BaseModel):

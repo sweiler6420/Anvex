@@ -409,9 +409,7 @@ class TestPolitician:
         assert (fetched.first_name, fetched.last_name) == ("Nancy", "Pelosi")
         assert fetched.dob == dt.date(1940, 3, 26)
 
-    async def test_the_optional_columns_really_are_optional(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_the_optional_columns_really_are_optional(self, db_session: AsyncSession) -> None:
         """The roster omits these for some rows; ANV-16 must not have to invent them."""
         politician = await PoliticianFactory().create(
             db_session, state=None, chamber=None, dob=None, gender=None

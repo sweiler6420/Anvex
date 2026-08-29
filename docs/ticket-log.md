@@ -670,3 +670,59 @@ once it holds the row it holds `stock_id` — the leading column of the `(stock_
 index. Joining `stocks` a second time would be work for nothing. `FakeStockDataRepo` therefore
 implements only `list_for_stock` and is deliberately unable to distinguish an unknown stock from an
 empty one, which is what makes a service that skipped the parent lookup fail.
+
+### ANV-15 — Done
+Commit `fe354d5`, 12 files, **499 new tests** (351 domain, 67 service unit, 58 API, 23 integration).
+**Verified independently:** `1492 passed / 5 skipped` with `db-test` up, `1256 passed / 241 skipped`
+with it stopped, ruff clean, 26 ownership-isolation tests green. 100% coverage on
+`app/domain/watchlist.py` and `app/services/watchlist.py`.
+
+**It found a bug the orchestrator authored.** `(max_position or -1) + 1` — written into ANV-9's
+carry-over notes, and from there into `CLAUDE.md` and `app/repos/watchlist.py`'s docstring — is
+wrong, and not for the empty case. **`0` is falsy**, so appending to a watchlist holding one stock
+at position 0 gives `(0 or -1) + 1 == 0`: a tie the ordering can never resolve. `next_position` tests
+`is None`, a unit test and an integration test pin the `max_position == 0` case, and both pieces of
+orchestrator text were corrected.
+
+**`reposition(positions, *, stock_id, destination)`.** Input and output are the same
+`{stock_id: position}` shape, so results feed back in and moves compose. Keyed on `stock_id` with a
+destination and **nothing else** — there is deliberately no way to say "the thing at index 3",
+because that sentence cannot be verified server-side. The arithmetic is a list splice over the
+canonical order: remove, insert, renumber all. No direction branch, no `position == index`
+assumption.
+
+**Confirmed the ownership gap by reading the old code:** `get_watchlist` *does* check
+`user_id == current_user.user_id`; `reposition_stock` does **not** (it queries `WatchlistData` by
+`watchlist_id` alone and never references `current_user`); `add_watchlist_stock` does **not** either,
+and additionally never checks the watchlist exists at all.
+
+**Two further defects it found unprompted:** `add_watchlist_stock` unconditionally **prepends** at
+position 0, shifting everything down — so watching a new stock re-sorted the user's whole
+arrangement every time. And there was **no "list my watchlists" route**, so a lost `watchlist_id`
+was unrecoverable.
+
+**The ownership gate is a single private `_resolve_owned`** that every id-taking use case must pass
+through, and it deliberately uses `get_by_id` (the row alone, no eager load) so a refusal does no
+work on the child table — no size-proportional timing signal. The isolation sweep is parameterised
+over all five use cases × four assertions, and **its case list is derived from `vars(WatchlistService)`
+minus a named exempt set**, so adding a use case without isolation coverage fails the suite. The fake
+repo is deliberately unhelpful — `get_by_id` filters on `watchlist_id` alone, exactly like the real
+query — so a service that dropped the `user_id` comparison passes every other test in the file and
+fails only these.
+
+**Reorder edge cases:** up, down, no-op, to first, to last, single item, empty list, stock absent,
+destination past the end / `== n` / negative (all 422, never clamped, never wrapping),
+non-contiguous positions, non-zero-based, all-identical (legal — `position` has no unique
+constraint), negative stored positions. Plus a property sweep over **every** `(size, origin,
+destination)` for lists of 1–7, asserting the result is a permutation with positions exactly
+`0..n-1`, the moved stock at the requested index, others in original relative order, and every move
+reversible.
+
+Routes: `POST/GET /v1/watchlists`, `GET/DELETE /v1/watchlists/{id}`,
+`POST /v1/watchlists/{id}/stocks`, `DELETE|PATCH /v1/watchlists/{id}/stocks/{stock_id}`. The reorder
+is a `PATCH` returning 200 (the old one was a `PUT` returning **201** for a move that created
+nothing).
+
+**Repo-wide formatting settled here.** The agent noted `ruff format --check` would reformat 37
+files, i.e. formatting was never enforced. The orchestrator ran `ruff format` across the repo (122
+files, tests still green) and added the check to ANV-38's CI scope, so it cannot drift again.

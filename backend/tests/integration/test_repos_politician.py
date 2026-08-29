@@ -114,7 +114,7 @@ class TestListing:
         assert (by_state, by_party, by_chamber) == (3, 2, 3)
 
     async def test_the_filters_combine(self, db_session: AsyncSession) -> None:
-        """"Republican senators from Texas" is one call, not three round trips."""
+        """ "Republican senators from Texas" is one call, not three round trips."""
         await _seed(db_session)
 
         rows, total = await repo.list_politicians(
@@ -124,9 +124,7 @@ class TestListing:
         assert total == 1
         assert rows[0].politician_id == "TX-SEN-R"
 
-    async def test_a_filter_that_matches_nothing_is_empty(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_a_filter_that_matches_nothing_is_empty(self, db_session: AsyncSession) -> None:
         await _seed(db_session)
 
         assert await repo.list_politicians(db_session, state="ZZ", limit=10) == ([], 0)
@@ -139,9 +137,7 @@ class TestListing:
 
 
 class TestPaginationBoundaries:
-    async def test_limit_windows_the_rows_but_not_the_total(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_limit_windows_the_rows_but_not_the_total(self, db_session: AsyncSession) -> None:
         await _seed(db_session)
 
         rows, total = await repo.list_politicians(db_session, limit=2)

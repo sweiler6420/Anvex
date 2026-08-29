@@ -209,9 +209,7 @@ class TestAuthenticationIsRequired:
             algorithm=ALGORITHM,
         )
 
-        response = await client.get(
-            series_url, headers={"Authorization": f"Bearer {refresh}"}
-        )
+        response = await client.get(series_url, headers={"Authorization": f"Bearer {refresh}"})
 
         assert_error_envelope(response, status=401, code="wrong_token_type")
 
@@ -244,9 +242,7 @@ class TestTheDatetimeShape:
         assert response.status_code == 200, response.text
         return response.json()
 
-    async def test_a_point_carries_one_combined_datetime(
-        self, monday: dict[str, Any]
-    ) -> None:
+    async def test_a_point_carries_one_combined_datetime(self, monday: dict[str, Any]) -> None:
         """``(date + time)`` from the old SQL, now built by ``StockDataPoint.from_row``."""
         first, second = monday["items"]
 
@@ -287,9 +283,7 @@ class TestTheDatetimeShape:
             "volume",
         }
 
-    async def test_the_openapi_document_declares_the_naive_timestamp(
-        self, app: FastAPI
-    ) -> None:
+    async def test_the_openapi_document_declares_the_naive_timestamp(self, app: FastAPI) -> None:
         """A generated client is told the shape too, not just the live response."""
         point = app.openapi()["components"]["schemas"]["StockDataPoint"]
 
@@ -392,9 +386,7 @@ class TestTheEnvelope:
         self, client: AsyncClient, auth: dict[str, str], series_url: str
     ) -> None:
         """``CLAUDE.md`` §4: an HTTP client is never quietly handed a shorter page."""
-        response = await client.get(
-            series_url, params={"limit": MAX_PAGE_LIMIT + 1}, headers=auth
-        )
+        response = await client.get(series_url, params={"limit": MAX_PAGE_LIMIT + 1}, headers=auth)
 
         assert_error_envelope(response, status=422, code="validation_error")
 
@@ -562,9 +554,7 @@ class TestByTicker:
         assert response.status_code == 200, response.text
         assert response.json()["total"] == 6
 
-    async def test_the_document_declares_an_unconstrained_string(
-        self, app: FastAPI
-    ) -> None:
+    async def test_the_document_declares_an_unconstrained_string(self, app: FastAPI) -> None:
         """Nothing is happening at the edge: no pattern, no ``BeforeValidator``."""
         operation = app.openapi()["paths"][f"{BY_TICKER_URL}/{{ticker}}/data"]["get"]
         ticker = next(
@@ -607,9 +597,7 @@ class TestByTicker:
 class TestRouteOrdering:
     """Two routers share the ``/v1/stocks`` prefix, so the ordering is worth proving."""
 
-    def test_the_literal_route_is_declared_before_the_parameterised_one(
-        self, app: FastAPI
-    ) -> None:
+    def test_the_literal_route_is_declared_before_the_parameterised_one(self, app: FastAPI) -> None:
         paths = list(app.openapi()["paths"])
 
         assert paths.index(f"{BY_TICKER_URL}/{{ticker}}/data") < paths.index(
@@ -653,9 +641,7 @@ class TestRouterWiring:
         service, not a hand-written POST."""
         paths = app.openapi()["paths"]
         candle_paths = {
-            path: set(operations)
-            for path, operations in paths.items()
-            if path.endswith("/data")
+            path: set(operations) for path, operations in paths.items() if path.endswith("/data")
         }
 
         assert len(candle_paths) == 2
@@ -674,9 +660,9 @@ class TestRouterWiring:
 
     def test_the_routes_return_a_page_of_points(self, app: FastAPI) -> None:
         document = app.openapi()
-        content = document["paths"][f"{STOCKS_URL}/{{stock_id}}/data"]["get"]["responses"][
-            "200"
-        ]["content"]
+        content = document["paths"][f"{STOCKS_URL}/{{stock_id}}/data"]["get"]["responses"]["200"][
+            "content"
+        ]
         ref = content["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
 
         assert set(document["components"]["schemas"][ref]["properties"]) == {

@@ -93,9 +93,7 @@ class TestPurity:
         assert "app.settings" not in modules
         # Downward-only, and narrower than its neighbours: the error hierarchy is the only
         # Anvex module a watchlist ordinal rule needs.
-        assert {module for module in modules if module.startswith("app")} == {
-            "app.domain.errors"
-        }
+        assert {module for module in modules if module.startswith("app")} == {"app.domain.errors"}
 
     def test_it_never_reads_a_clock(self) -> None:
         """Ordinals have no time dimension, and the module says so; this makes that true."""
@@ -326,9 +324,7 @@ class TestRepositionRefusals:
         assert status_for(caught.value) == 422
 
     @pytest.mark.parametrize("destination", [-1, -3, -100])
-    def test_a_negative_destination_is_refused_rather_than_wrapping(
-        self, destination: int
-    ) -> None:
+    def test_a_negative_destination_is_refused_rather_than_wrapping(self, destination: int) -> None:
         """The second half of the old handler's unvalidated-index bug, and the quieter one.
 
         Python subscripts from the end, so the old code answered ``destination=-1`` by
@@ -387,9 +383,7 @@ class TestRepositionInvariant:
         assert [stock for stock in order(after) if stock != subject] == expected
 
     @pytest.mark.parametrize(("size", "origin", "destination"), _cases())
-    def test_every_move_is_reversible(
-        self, size: int, origin: int, destination: int
-    ) -> None:
+    def test_every_move_is_reversible(self, size: int, origin: int, destination: int) -> None:
         """Moving a stock away and back restores the original list exactly — which would
         not hold if either direction shifted one row too many or too few."""
         stocks = self.STOCKS[:size]
@@ -509,7 +503,7 @@ class TestRemove:
 
 class TestResourceNames:
     def test_the_two_nouns_are_distinct(self) -> None:
-        """"No such watchlist" and "that stock is not on it" are different facts, and a
+        """ "No such watchlist" and "that stock is not on it" are different facts, and a
         client that has already been told the list exists loses nothing by being told
         which."""
         assert RESOURCE != ENTRY_RESOURCE

@@ -94,9 +94,7 @@ def one_a_day(stock_id: uuid.UUID, days: tuple[dt.date, ...] = WEEK) -> list[Any
 
 def last_call(repo: FakeStockDataRepo) -> dict[str, Any]:
     """The keyword arguments the service passed to the candle repo."""
-    return next(
-        argument for name, argument in reversed(repo.calls) if name == "list_for_stock"
-    )
+    return next(argument for name, argument in reversed(repo.calls) if name == "list_for_stock")
 
 
 @pytest.fixture
@@ -172,9 +170,7 @@ class TestEnvelope:
         seen: list[dt.datetime] = []
 
         for offset in (0, 2, 4):
-            page = await service.list_for_stock(
-                stock_id=apple.stock_id, limit=2, offset=offset
-            )
+            page = await service.list_for_stock(stock_id=apple.stock_id, limit=2, offset=offset)
             seen.extend(point.datetime for point in page.items)
 
         assert len(seen) == len(set(seen)) == 5
@@ -199,9 +195,7 @@ class TestDateRange:
         """Tuesday to Thursday is three candles, not one."""
         service, _, _, _ = week
 
-        page = await service.list_for_stock(
-            stock_id=apple.stock_id, start=TUESDAY, end=THURSDAY
-        )
+        page = await service.list_for_stock(stock_id=apple.stock_id, start=TUESDAY, end=THURSDAY)
 
         assert page.total == 3
         assert [point.datetime.date() for point in page.items] == [
@@ -213,9 +207,7 @@ class TestDateRange:
     async def test_a_single_day_returns_that_day(self, week: Any, apple: Any) -> None:
         service, _, _, _ = week
 
-        page = await service.list_for_stock(
-            stock_id=apple.stock_id, start=WEDNESDAY, end=WEDNESDAY
-        )
+        page = await service.list_for_stock(stock_id=apple.stock_id, start=WEDNESDAY, end=WEDNESDAY)
 
         assert page.total == 1
         assert page.items[0].datetime.date() == WEDNESDAY
@@ -252,9 +244,7 @@ class TestDateRange:
         service, _, candles, _ = week
 
         with pytest.raises(ValidationError) as raised:
-            await service.list_for_stock(
-                stock_id=apple.stock_id, start=FRIDAY, end=MONDAY
-            )
+            await service.list_for_stock(stock_id=apple.stock_id, start=FRIDAY, end=MONDAY)
 
         assert raised.value.field == "start"
         assert candles.calls == [], "nothing should have been queried"
@@ -267,9 +257,7 @@ class TestDateRange:
         service, stocks, _, _ = build_service(stocks=FakeStockRepo(apple))
 
         with pytest.raises(ValidationError):
-            await service.list_for_stock(
-                stock_id=uuid.uuid4(), start=FRIDAY, end=MONDAY
-            )
+            await service.list_for_stock(stock_id=uuid.uuid4(), start=FRIDAY, end=MONDAY)
 
         assert stocks.calls == []
 
@@ -289,9 +277,7 @@ class TestDateRange:
         """The route cannot hand one over, but a Celery task holding ``datetime.now()`` can."""
         service, _, candles, _ = week
 
-        await service.list_for_stock(
-            stock_id=apple.stock_id, start=dt.datetime(2026, 1, 6, 16, 0)
-        )
+        await service.list_for_stock(stock_id=apple.stock_id, start=dt.datetime(2026, 1, 6, 16, 0))
 
         call = last_call(candles)
         assert call["start"] == TUESDAY
@@ -324,9 +310,7 @@ class TestWindow:
         assert last_call(candles)["limit"] == MAX_PAGE_LIMIT
         assert page.limit == MAX_PAGE_LIMIT
 
-    async def test_a_negative_offset_becomes_the_first_page(
-        self, week: Any, apple: Any
-    ) -> None:
+    async def test_a_negative_offset_becomes_the_first_page(self, week: Any, apple: Any) -> None:
         service, _, candles, _ = week
 
         page = await service.list_for_stock(stock_id=apple.stock_id, offset=-10)
@@ -367,9 +351,7 @@ class TestByStockId:
         }
         assert candles.calls == [], "the candle table is never touched for a missing stock"
 
-    async def test_a_known_stock_with_no_candles_at_all_is_an_empty_page(
-        self, apple: Any
-    ) -> None:
+    async def test_a_known_stock_with_no_candles_at_all_is_an_empty_page(self, apple: Any) -> None:
         """The other half of the same distinction, and the reason the fake is ambiguous."""
         service, _, _, _ = build_service(stocks=FakeStockRepo(apple))
 
@@ -382,9 +364,7 @@ class TestByStockId:
         other = make_stock(ticker_symbol="MSFT", company="Microsoft Corporation")
         service, _, _, _ = build_service(
             stocks=FakeStockRepo(apple, other),
-            candles=FakeStockDataRepo(
-                *one_a_day(apple.stock_id), *one_a_day(other.stock_id)
-            ),
+            candles=FakeStockDataRepo(*one_a_day(apple.stock_id), *one_a_day(other.stock_id)),
         )
 
         page = await service.list_for_stock(stock_id=other.stock_id)
@@ -441,9 +421,7 @@ class TestByTicker:
 
         assert "'NOPE'" in raised.value.message
 
-    async def test_the_range_and_window_apply_by_ticker_too(
-        self, week: Any
-    ) -> None:
+    async def test_the_range_and_window_apply_by_ticker_too(self, week: Any) -> None:
         service, _, candles, _ = week
 
         page = await service.list_for_ticker(
@@ -588,9 +566,7 @@ class TestReadOnly:
 
 
 def service_tree() -> ast.Module:
-    return ast.parse(
-        FilePath(stock_data_service_module.__file__).read_text(encoding="utf-8")
-    )
+    return ast.parse(FilePath(stock_data_service_module.__file__).read_text(encoding="utf-8"))
 
 
 class TestLayering:
@@ -618,9 +594,7 @@ class TestLayering:
                 modules.add(node.module)
 
         assert "app.domain.stock" in modules
-        assert not any(
-            module.startswith("app.services.") for module in modules
-        ), modules
+        assert not any(module.startswith("app.services.") for module in modules), modules
 
     def test_the_service_raises_no_http_exception(self) -> None:
         used = {

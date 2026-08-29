@@ -125,9 +125,7 @@ class TestRangeReads:
         assert [row.date for row in rows] == [DAY_ONE, DAY_TWO, DAY_THREE]
         assert total == 3
 
-    async def test_it_does_not_leak_another_stocks_candles(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_it_does_not_leak_another_stocks_candles(self, db_session: AsyncSession) -> None:
         mine = await StockFactory().create(db_session)
         theirs = await StockFactory().create(db_session)
         await _series(db_session, mine)
@@ -137,9 +135,7 @@ class TestRangeReads:
 
         assert total == 3
 
-    async def test_the_date_range_is_inclusive_at_both_ends(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_the_date_range_is_inclusive_at_both_ends(self, db_session: AsyncSession) -> None:
         stock = await StockFactory().create(db_session)
         await _series(db_session, stock)
 
@@ -215,9 +211,7 @@ class TestRangeReadsByTicker:
 
 
 class TestPaginationBoundaries:
-    async def test_limit_windows_the_rows_but_not_the_total(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_limit_windows_the_rows_but_not_the_total(self, db_session: AsyncSession) -> None:
         stock = await StockFactory().create(db_session)
         await _series(db_session, stock)
 
@@ -261,9 +255,7 @@ class TestPaginationBoundaries:
 
 
 class TestEagerLoading:
-    async def test_the_plain_list_does_not_load_the_stock(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_the_plain_list_does_not_load_the_stock(self, db_session: AsyncSession) -> None:
         """Stated so the split between the two list methods is not mistaken for an accident."""
         stock = await StockFactory().create(db_session, ticker_symbol="MSFT")
         await StockDataFactory().create(db_session, stock=stock)
@@ -385,7 +377,7 @@ class TestBulkUpsert:
         assert await repo.count_for_stock(db_session, second.stock_id) == 1
 
     async def test_an_empty_batch_is_a_no_op(self, db_session: AsyncSession) -> None:
-        """"Nothing to ingest" is normal, and an empty `VALUES` is a syntax error."""
+        """ "Nothing to ingest" is normal, and an empty `VALUES` is a syntax error."""
         assert await repo.bulk_upsert(db_session, []) == 0
 
     async def test_a_batch_with_internal_duplicates_is_rejected(

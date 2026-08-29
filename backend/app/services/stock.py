@@ -142,9 +142,7 @@ class StockService:
     # -----------------------------------------------------------------------------------
 
     @staticmethod
-    def _page(
-        rows: list[Stock], total: int, *, limit: int, offset: int
-    ) -> Page[StockOut]:
+    def _page(rows: list[Stock], total: int, *, limit: int, offset: int) -> Page[StockOut]:
         """Wrap ``(rows, total)`` from the repo in the response envelope.
 
         The projection to :class:`~app.schemas.stock.StockOut` happens on the way in, so no

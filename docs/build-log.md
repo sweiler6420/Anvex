@@ -71,10 +71,12 @@ modified. What each contributes to Anvex:
 | ANV-12 | Users service and routes | **Done** — *E3 Auth complete* |
 | ANV-13 | Stocks service and routes | **Done** |
 | ANV-14 | Stock data service and routes | **Done** |
-| ANV-15 | Watchlists — reorder domain, service and routes | Next |
-| ANV-16 … ANV-41 | see `backlog.md` | Not started |
+| ANV-15 | Watchlists — reorder domain, service and routes | **Done** |
+| ANV-16 | Politicians seed data, service and routes | Next |
+| ANV-17 … ANV-41 | see `backlog.md` | Not started |
 
-**993 tests** passing with `db-test` up (780 with it stopped, DB tier skipping), 91% coverage.
+**1,492 tests** passing with `db-test` up (1,256 with it stopped, DB tier skipping), 92% coverage.
+`ruff check` and `ruff format --check` are both clean across all 122 files.
 
 ---
 
@@ -83,24 +85,22 @@ modified. What each contributes to Anvex:
 Only what is still outstanding. Once a ticket consumes one of these, delete it — the full record
 stays in [`ticket-log.md`](./ticket-log.md).
 
-**For ANV-15 (watchlists) — the two that matter most:**
-- **Ownership is the service's job.** The repo layer deliberately provides no "owned by user" query.
-  Compare `watchlist.user_id` to the token subject in the service, or one user gets another's list.
-- **Refuse with 404, not 403** — identical to "does not exist", raised *before* any query, exactly as
-  ANV-12 did for users. A 403 confirms which watchlist ids are real.
-- `max_position` returns `None` on an empty watchlist, not `-1`; the append rule
-  `(max_position or -1) + 1` is a rule and belongs in `app/domain/watchlist.py`.
-- `position` is deliberately **not** unique per watchlist, so `set_positions` can apply a mid-swap
-  state in one flush.
-- **Parent-resolution shape from ANV-14 transfers directly:** resolve the watchlist first, then page
-  its entries — unknown parent 404, known parent with no rows is an empty 200. The difference is
-  that a watchlist *is* owned, so the 404-not-403 rule stacks on top; a stock has no owner and its
-  404 is the plain kind.
-- Reuse `resolve_window` from `app/domain/stock_data.py` (it is generic) rather than re-deriving
-  offset handling, and follow `resolve_candle_query`'s division of labour: one small pure `resolve_*`
-  called once at the top of the service method, returning a frozen value the rest reads. **Validate
-  input before checking existence**, so a malformed request never reveals whether an id is real.
-- API tests need **two accounts in `FakeUserRepo`** to prove ownership isolation with no database.
+**For ANV-16 (politicians):**
+- **Do not import the ownership machinery.** Politicians are reference data with no owner, so their
+  404 is the plain kind, like `app/services/stock.py`'s. `_resolve_owned` does not apply.
+- `resolve_window` (in `app/domain/stock_data.py`) now has **two** callers. If ANV-16's paginated
+  list becomes the third, that is the moment to move it down to a neutral `app/domain/pagination.py`
+  with a re-export — per CLAUDE.md's "a pure rule with a second caller moves down" rule.
+- **Seeding is idempotent via `bulk_upsert` on a real constraint**, and the batch must be
+  deduplicated in `app/domain/` first — the repo does no dedupe and a batch with an internal
+  duplicate raises `cannot affect row a second time`.
+- Copy `list_mine`'s shape verbatim for the paginated list.
+
+**For any ticket writing a service — the sweep pattern (new, from ANV-15):**
+Any property that must hold for *every* use case (auth required, resource noun stable, no commit on
+a read) is better expressed as one parameterised sweep whose case list is **derived** from
+`vars(XService)` and asserted complete, than as N hand-written tests one of which will be forgotten.
+ANV-15's ownership sweep fails the suite if a new use case is added without isolation coverage.
 
 **For ANV-22 (ingest):**
 - `bulk_upsert` is a Core statement — it does **not** update the session's identity map. Re-read or

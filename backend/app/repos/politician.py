@@ -35,9 +35,7 @@ class PoliticianRepo(BaseRepo[Politician]):
 
     model = Politician
 
-    async def get_by_id(
-        self, session: AsyncSession, politician_id: str
-    ) -> Politician | None:
+    async def get_by_id(self, session: AsyncSession, politician_id: str) -> Politician | None:
         """The legislator with this roster id, or ``None``."""
         return await self._one_or_none(
             session, select(Politician).where(Politician.politician_id == politician_id)
@@ -91,9 +89,7 @@ class PoliticianRepo(BaseRepo[Politician]):
         """
         return await self.add(session, Politician(**values))
 
-    async def bulk_upsert(
-        self, session: AsyncSession, rows: Iterable[Mapping[str, Any]]
-    ) -> int:
+    async def bulk_upsert(self, session: AsyncSession, rows: Iterable[Mapping[str, Any]]) -> int:
         """Insert or update many legislators in one statement; returns rows written.
 
         ``INSERT ... ON CONFLICT (politician_id) DO UPDATE`` — the same idempotency

@@ -118,8 +118,7 @@ class World:
 
     def positions(self) -> dict[uuid.UUID, int]:
         return {
-            entry.stock_id: entry.position
-            for entry in self.watchlists._ordered(self.watchlist_id)
+            entry.stock_id: entry.position for entry in self.watchlists._ordered(self.watchlist_id)
         }
 
     def methods_called(self) -> list[str]:
@@ -161,9 +160,7 @@ class TestCreate:
     async def test_the_owner_comes_from_the_token_not_the_body(self, world: World) -> None:
         """:class:`~app.schemas.watchlist.WatchlistCreate` has no ``user_id`` field at all,
         so there is nothing for a caller to put somebody else's account into."""
-        created = await world.service.create(
-            WatchlistCreate(title="Semis"), owner=world.owner
-        )
+        created = await world.service.create(WatchlistCreate(title="Semis"), owner=world.owner)
 
         assert created.user_id == world.owner.user_id
         assert "user_id" not in WatchlistCreate.model_fields
@@ -200,9 +197,7 @@ class TestListMine:
 
         assert (page.items, page.total, page.has_more) == ([], 0, False)
 
-    async def test_the_window_is_resolved_before_it_reaches_the_repo(
-        self, world: World
-    ) -> None:
+    async def test_the_window_is_resolved_before_it_reaches_the_repo(self, world: World) -> None:
         """``resolve_window`` is ANV-14's, reused rather than re-derived: ``None`` becomes
         the default limit and a negative offset is floored for callers with no request to
         reject."""
@@ -258,28 +253,20 @@ class TestGetWatchlist:
 
         assert caught.value.details == {"resource": RESOURCE, "identifier": str(MISSING)}
 
-    async def test_it_reads_the_detail_through_the_eager_loading_query(
-        self, world: World
-    ) -> None:
+    async def test_it_reads_the_detail_through_the_eager_loading_query(self, world: World) -> None:
         """``get_by_id`` does not load entries — under asyncio touching them would raise
         ``MissingGreenlet`` — so the detail must come from ``get_with_entries``."""
-        await world.service.get_watchlist(
-            watchlist_id=world.watchlist_id, owner=world.owner
-        )
+        await world.service.get_watchlist(watchlist_id=world.watchlist_id, owner=world.owner)
 
         assert "get_with_entries" in world.methods_called()
 
 
 class TestDeleteWatchlist:
     async def test_it_removes_the_watchlist_and_its_entries(self, world: World) -> None:
-        await world.service.delete_watchlist(
-            watchlist_id=world.watchlist_id, owner=world.owner
-        )
+        await world.service.delete_watchlist(watchlist_id=world.watchlist_id, owner=world.owner)
 
         assert world.watchlists.watchlists == [world.other]
-        assert all(
-            entry.watchlist_id != world.watchlist_id for entry in world.watchlists.entries
-        )
+        assert all(entry.watchlist_id != world.watchlist_id for entry in world.watchlists.entries)
         assert world.session.commits == 1
 
     async def test_an_unknown_id_is_not_found(self, world: World) -> None:
@@ -303,9 +290,7 @@ class TestAddStock:
         assert entry.position == 3
         assert world.session.commits == 1
 
-    async def test_appending_to_an_empty_watchlist_lands_at_zero(
-        self, empty_world: World
-    ) -> None:
+    async def test_appending_to_an_empty_watchlist_lands_at_zero(self, empty_world: World) -> None:
         entry = await empty_world.service.add_stock(
             WatchlistEntryCreate(stock_id=empty_world.apple.stock_id),
             watchlist_id=empty_world.watchlist_id,
@@ -606,9 +591,7 @@ class TestReorderStock:
 
         assert caught.value.details["resource"] == ENTRY_RESOURCE
 
-    async def test_it_repairs_untidy_positions_on_the_way_through(
-        self, empty_world: World
-    ) -> None:
+    async def test_it_repairs_untidy_positions_on_the_way_through(self, empty_world: World) -> None:
         """Ordinals with gaps are a state the database can genuinely be in — ``position``
         carries no unique constraint and nothing renumbers behind a caller's back. A reorder
         must renumber the whole list, not patch the rows it thinks moved."""
@@ -707,9 +690,7 @@ class TestOwnershipIsolation:
         assert absent.value.details["identifier"] == str(MISSING)
 
     @pytest.mark.parametrize("use_case", USE_CASES)
-    async def test_the_refusal_never_touches_the_entries(
-        self, world: World, use_case: str
-    ) -> None:
+    async def test_the_refusal_never_touches_the_entries(self, world: World, use_case: str) -> None:
         """Raised before any query on the child, so response *time* does not answer the
         question either — and so nothing about a list the caller may not see is loaded."""
         with pytest.raises(NotFoundError):

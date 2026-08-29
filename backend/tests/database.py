@@ -103,9 +103,7 @@ def database_url(database: str | None = None) -> str:
 def describe_target() -> str:
     """Human-readable ``host:port/database``, for skip messages."""
     harness = harness_settings()
-    return (
-        f"{harness.postgres_test_host}:{harness.postgres_test_port}/{harness.postgres_test_db}"
-    )
+    return f"{harness.postgres_test_host}:{harness.postgres_test_port}/{harness.postgres_test_db}"
 
 
 async def _ping(url: str) -> None:

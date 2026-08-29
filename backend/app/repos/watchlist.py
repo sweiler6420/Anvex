@@ -35,9 +35,7 @@ class WatchlistRepo(BaseRepo[Watchlist]):
     # Watchlists
     # -----------------------------------------------------------------------------------
 
-    async def get_by_id(
-        self, session: AsyncSession, watchlist_id: uuid.UUID
-    ) -> Watchlist | None:
+    async def get_by_id(self, session: AsyncSession, watchlist_id: uuid.UUID) -> Watchlist | None:
         """The watchlist with this id, or ``None``. Entries are **not** loaded."""
         return await self._one_or_none(
             session, select(Watchlist).where(Watchlist.watchlist_id == watchlist_id)
@@ -166,9 +164,7 @@ class WatchlistRepo(BaseRepo[Watchlist]):
             select(WatchlistData.stock_id).where(WatchlistData.watchlist_id == watchlist_id),
         )
 
-    async def max_position(
-        self, session: AsyncSession, watchlist_id: uuid.UUID
-    ) -> int | None:
+    async def max_position(self, session: AsyncSession, watchlist_id: uuid.UUID) -> int | None:
         """The highest ordinal on this watchlist, or ``None`` when it is empty.
 
         ``None`` rather than ``-1``: "there is no last position" is a different statement

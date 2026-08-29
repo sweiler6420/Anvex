@@ -192,9 +192,7 @@ def insert(
     return dense_positions(order)
 
 
-def remove(
-    positions: Mapping[uuid.UUID, int], *, stock_id: uuid.UUID
-) -> dict[uuid.UUID, int]:
+def remove(positions: Mapping[uuid.UUID, int], *, stock_id: uuid.UUID) -> dict[uuid.UUID, int]:
     """Take a stock off the watchlist and close the gap it leaves.
 
     The renumbering matters: without it a five-stock list that has had its third stock

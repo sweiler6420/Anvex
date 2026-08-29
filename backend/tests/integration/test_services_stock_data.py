@@ -96,9 +96,7 @@ class TestOrdering:
         seen: list[dt.datetime] = []
 
         for offset in (0, 3, 6):
-            page = await service.list_for_stock(
-                stock_id=stock.stock_id, limit=3, offset=offset
-            )
+            page = await service.list_for_stock(stock_id=stock.stock_id, limit=3, offset=offset)
             seen.extend(point.datetime for point in page.items)
 
         assert seen == series
@@ -158,9 +156,7 @@ class TestDateRange:
     async def test_an_open_start_means_everything_until(
         self, db_session: AsyncSession, stock: Stock, series: list[dt.datetime]
     ) -> None:
-        page = await build_service(db_session).list_for_stock(
-            stock_id=stock.stock_id, end=DAY_TWO
-        )
+        page = await build_service(db_session).list_for_stock(stock_id=stock.stock_id, end=DAY_TWO)
 
         assert page.total == 6
 
@@ -261,9 +257,7 @@ class TestTheRoundTrip:
 
         assert page.items[0].datetime.tzinfo is None
 
-    async def test_a_read_commits_nothing(
-        self, db_session: AsyncSession, priced: Stock
-    ) -> None:
+    async def test_a_read_commits_nothing(self, db_session: AsyncSession, priced: Stock) -> None:
         await build_service(db_session).list_for_stock(stock_id=priced.stock_id)
 
         assert db_session.in_transaction()

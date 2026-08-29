@@ -192,9 +192,7 @@ class StockDataService:
         return self._page(rows, total, query=query)
 
     @staticmethod
-    def _page(
-        rows: list[StockData], total: int, *, query: CandleQuery
-    ) -> Page[StockDataPoint]:
+    def _page(rows: list[StockData], total: int, *, query: CandleQuery) -> Page[StockDataPoint]:
         """Wrap ``(rows, total)`` from the repo in the response envelope.
 
         The projection happens on the way in, so no ORM instance ever reaches the API

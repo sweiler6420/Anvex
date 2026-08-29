@@ -236,7 +236,7 @@ class TestListStocksSearch:
         assert page.total == 1
 
     async def test_the_company_name_is_searchable_too(self) -> None:
-        """"nvidia" is how a person looks for NVDA."""
+        """ "nvidia" is how a person looks for NVDA."""
         service, _, _ = build_service(*self.catalogue())
 
         page = await service.list_stocks(search="nvidia")

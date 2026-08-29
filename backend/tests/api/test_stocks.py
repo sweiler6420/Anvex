@@ -104,9 +104,7 @@ def apple(stocks: FakeStockRepo) -> Any:
 
 
 @pytest.fixture
-def app(
-    app: FastAPI, settings: Settings, stocks: FakeStockRepo, account: Any
-) -> FastAPI:
+def app(app: FastAPI, settings: Settings, stocks: FakeStockRepo, account: Any) -> FastAPI:
     """The application with the stock service on an in-memory repo and auth likewise.
 
     Auth is overridden as well because every route here sits behind ``CurrentUser``:
@@ -175,9 +173,7 @@ class TestAuthenticationIsRequired:
             algorithm=ALGORITHM,
         )
 
-        response = await client.get(
-            STOCKS_URL, headers={"Authorization": f"Bearer {refresh}"}
-        )
+        response = await client.get(STOCKS_URL, headers={"Authorization": f"Bearer {refresh}"})
 
         assert_error_envelope(response, status=401, code="wrong_token_type")
 
@@ -233,9 +229,7 @@ class TestListStocks:
     async def test_limit_and_offset_move_the_window(
         self, client: AsyncClient, auth: dict[str, str]
     ) -> None:
-        response = await client.get(
-            STOCKS_URL, params={"limit": 2, "offset": 1}, headers=auth
-        )
+        response = await client.get(STOCKS_URL, params={"limit": 2, "offset": 1}, headers=auth)
 
         body = response.json()
         assert [item["ticker_symbol"] for item in body["items"]] == ["MSFT", "NVDA"]
@@ -312,9 +306,7 @@ class TestListStocks:
     async def test_the_ceiling_itself_is_allowed(
         self, client: AsyncClient, auth: dict[str, str]
     ) -> None:
-        response = await client.get(
-            STOCKS_URL, params={"limit": MAX_PAGE_LIMIT}, headers=auth
-        )
+        response = await client.get(STOCKS_URL, params={"limit": MAX_PAGE_LIMIT}, headers=auth)
 
         assert response.status_code == 200
         assert response.json()["limit"] == MAX_PAGE_LIMIT
@@ -346,9 +338,7 @@ class TestReadStockById:
         error = assert_error_envelope(response, status=404, code="not_found")
         assert error["details"] == {"resource": "stock", "identifier": str(missing)}
 
-    async def test_a_non_uuid_id_is_a_422(
-        self, client: AsyncClient, auth: dict[str, str]
-    ) -> None:
+    async def test_a_non_uuid_id_is_a_422(self, client: AsyncClient, auth: dict[str, str]) -> None:
         response = await client.get(f"{STOCKS_URL}/not-a-uuid", headers=auth)
 
         assert_error_envelope(response, status=422, code="validation_error")
@@ -441,9 +431,7 @@ class TestRouteOrdering:
     a comment claiming a fix that is not load-bearing is worse than no comment.
     """
 
-    def test_the_literal_route_is_declared_before_the_parameterised_one(
-        self, app: FastAPI
-    ) -> None:
+    def test_the_literal_route_is_declared_before_the_parameterised_one(self, app: FastAPI) -> None:
         """Read off the OpenAPI document, whose ``paths`` are emitted by walking the route
         table in declaration order — a public surface, unlike the private structure
         ``app.routes`` uses to hold an included router."""
@@ -539,9 +527,7 @@ class TestRouteOrdering:
 
         async def fetch(control: FastAPI) -> Any:
             transport = ASGITransport(app=control, raise_app_exceptions=False)
-            async with AsyncClient(
-                transport=transport, base_url="http://testserver"
-            ) as probe:
+            async with AsyncClient(transport=transport, base_url="http://testserver") as probe:
                 return await probe.get("/stocks/popular")
 
         correct = await fetch(build(literal_first=True))
@@ -558,9 +544,7 @@ class TestRouteOrdering:
 
 
 class TestRouterWiring:
-    def test_the_three_routes_are_mounted_under_the_version_prefix(
-        self, app: FastAPI
-    ) -> None:
+    def test_the_three_routes_are_mounted_under_the_version_prefix(self, app: FastAPI) -> None:
         paths = app.openapi()["paths"]
 
         assert set(paths[STOCKS_URL]) == {"get"}
