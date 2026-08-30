@@ -144,10 +144,10 @@ sequenceDiagram
     participant RID as RequestIDMiddleware
     participant LOG as AccessLogMiddleware
     participant CORS as CORSMiddleware
-    participant R as Router (app/api/v1/)
-    participant D as Depends (app/deps/)
-    participant S as Service (app/services/)
-    participant Q as Repo (app/repos/)
+    participant R as Router
+    participant D as Depends
+    participant S as Service
+    participant Q as Repo
     participant P as Postgres
     participant E as Exception handlers
 
@@ -170,7 +170,7 @@ sequenceDiagram
     RID-->>C: response, echoing X-Request-ID
 
     Note over S,E: any app/domain/errors.py exception unwinds to here
-    S--xE: NotFoundError("watchlist", id)
+    S--xE: raises NotFoundError
     E-->>C: 404 with the one error envelope
 ```
 
@@ -317,9 +317,9 @@ and each of those makes exactly one call.
 sequenceDiagram
     autonumber
     participant B as beat
-    participant K as Redis (db 0)
-    participant W as worker (prefork child)
-    participant RA as run_async (app/jobs/base.py)
+    participant K as Redis broker
+    participant W as worker
+    participant RA as run_async
     participant SV as IngestService
     participant AV as AlphaVantage
     participant PG as Postgres
@@ -439,8 +439,8 @@ erDiagram
         uuid user_id FK "ON DELETE CASCADE"
     }
     watchlist_data {
-        uuid watchlist_id PK_FK "ON DELETE CASCADE"
-        uuid stock_id PK_FK "ON DELETE RESTRICT"
+        uuid watchlist_id PK "FK to watchlists, ON DELETE CASCADE"
+        uuid stock_id PK "FK to stocks, ON DELETE RESTRICT"
         int position
     }
     politicians {
