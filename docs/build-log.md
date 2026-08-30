@@ -9,6 +9,9 @@ is the handoff document, and it is kept short on purpose.
 | [`../CLAUDE.md`](../CLAUDE.md) | the architecture contract — what goes where, and why |
 | [`backlog.md`](./backlog.md) | the ticket specs, in execution order |
 | [`ticket-log.md`](./ticket-log.md) | the archive: what each completed ticket decided and found |
+| [`architecture.md`](./architecture.md) | the system, the two paths through it, the data model, and the **known limitations** |
+| [`adr/`](./adr/) | one record per decision, with the context and the costs as they actually were |
+| [`../backend/docs/`](../backend/docs/) | the runbook, the testing guide, and one endpoint through all seven layers |
 
 ## How this build runs
 
@@ -101,12 +104,20 @@ modified. What each contributes to Anvex:
 | ANV-37 | Developer scripts | **Done** |
 | ANV-38 | CI pipeline | **Done** — *green on the first push* |
 | ANV-40 | AWS infrastructure skeleton | **Done** — *validated, never applied, $0.00* |
-| ANV-39 | Documentation and ADRs | Next |
-| ANV-41 | E2E smoke | Not started — *the last one* |
+| ANV-39 | Documentation and ADRs | **Done** — *architecture, runbook, walkthrough, 11 ADRs, all drift-tested* |
+| ANV-41 | E2E smoke | Next — *the last one* |
 
-**4,469 tests total** — **3,547 backend** (3,164 with Docker stopped, DB/S3/broker tiers skipping)
-and **922 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check`
-and `eslint` all clean. Container tiers genuinely execute: **276 DB**, **29 S3**, **9 broker**.
+**4,801 tests total** — **3,879 backend** (3,565 once the DB/S3/broker tiers are deselected) and
+**922 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check` and
+`eslint` all clean. Container tiers genuinely execute: **276 DB**, **29 S3**, **9 broker**.
+
+**The documentation is now drift-tested** (ANV-39). [`architecture.md`](./architecture.md) is the
+system diagram, the request path, the job path, the data model, the API surface and — read this
+before filing anything — the **known limitations**. [`adr/`](./adr/) holds eleven records.
+[`../backend/docs/`](../backend/docs/) holds the runbook, the testing guide and a walkthrough of one
+real endpoint through all seven layers. `backend/tests/unit/test_docs.py` (332 tests) is what keeps
+them true: **adding a route means adding a row to the API surface table, and adding a
+`TODO(ANV-…)` means adding a row to the limitations table**, both asserted in both directions.
 
 **There is Terraform in `backend/infra/` and it has never been applied.** No AWS account has been
 touched, no credential exists, and the running cost is $0.00 (ANV-40). Local development depends on
@@ -123,7 +134,8 @@ single container runs.
 They already encode every trap in the table above, so a session that uses them cannot fall into one.
 
 **Cosmetic issues in the ported marketing copy, flagged and deliberately NOT changed** (they are
-Stephen's, and each changes appearance):
+Stephen's, and each changes appearance). Summarised for a reader in
+[`architecture.md`](./architecture.md) §6; the detail stays here:
 - `Features` carries **`sm:1/2`** — a typo for `sm:w-1/2`, so it is not a Tailwind class at all and
   the cards stay one-per-row until `lg`. One-line fix, but it changes the `sm` layout.
 - Only `Pricing`'s **middle card has `h-full`**, so at `sm` the Pro card stretches and its
@@ -371,28 +383,20 @@ is 8 to the client and 4 to the server.
 - **Never persist a password.** The old app wrote it to `localStorage` for "remember me" — username
   only, and the access token stays in memory.
 
-**Still unimplemented, deliberately:**
-- **No mail client.** `POST /v1/auth/recovery` logs `delivered=False` and returns 202, behind a
-  `TODO(ANV-mail)` that a unit test asserts is still present. Wiring real delivery needs its own
-  ticket.
-- **No deep historical backfill.** `ingest_month` takes any explicit month, but nothing infers a gap
-  older than the watermark.
-- **`download_url` exists but no route mounts it** — whether a presigned URL should leave the API is
-  an open decision, not an oversight.
+**Still unimplemented, deliberately.** The full list, with the reasoning and the markers, is
+[`architecture.md`](./architecture.md) §6 — that is now the canonical home and a drift test keeps
+it true. The short version: no mail client (`POST /v1/auth/recovery` logs `delivered=False` and
+returns 202 behind `TODO(ANV-mail)`); no deep historical backfill; no route mounts `download_url`
+or anything else in `StorageService`; `S3Client` cannot talk to real AWS S3
+(`TODO(ANV-s3-aws)`); no TLS to Postgres or Redis; `/portfolio` is a documented non-feature; and
+the research desktop's arrangement does not survive a reload.
 
 
-**For the remaining ops tickets — from ANV-43:**
-- **ANV-39 (docs):** the registration 422 now carries `details.failed_rules` — a list of rule ids
-  from `("length", "uppercase", "number", "symbol")`. Worth documenting beside the error envelope,
-  because it is the first `details` value that is not a scalar.
+**For ANV-41 — from ANV-43:**
 - **ANV-41 (smoke):** any smoke script that registers an account needs a password satisfying the
   policy. `"Correct-horse-battery1"` is the value the suites standardised on.
 
-**For the remaining ops tickets (ANV-39, 41) — from ANV-36:**
-- **ANV-39 (docs):** **`/portfolio` is a documented non-feature, not a bug** — say so, or the first
-  reader files it. Likewise: **the research desktop's window arrangement does not survive a
-  reload**, which is the highest-value follow-up on that page. The cosmetic issues in the ported
-  marketing and research copy are Stephen's and deliberate.
+**For ANV-41 — from ANV-36:**
 - **ANV-41 (smoke):** ANV-36's live-render technique is the right shape and is cheap — jsdom over
   `dist/`, a fake `XMLHttpRequest`, assertions on `data-testid`. **Two non-obvious requirements:**
   jsdom 25 defines neither `fetch` nor `Response`, and TanStack Router's redirect machinery does an
@@ -405,7 +409,7 @@ is 8 to the client and 4 to the server.
 - **Known follow-ups worth tickets:** desktop layout persistence (needs an API endpoint — there is
   none), and a holdings model + quote source before `/portfolio` can be real.
 
-**For the remaining ops tickets (ANV-39, 41) — from ANV-37:**
+**For ANV-41 — from ANV-37:**
 - **ANV-41 (smoke):** `scripts/smoke` should be a pair like everything else and will need a README
   row. The boot sequence it documents already exists and is verified: `up core` → `migrate` →
   `seed`, then `up frontend`. `reset-db --yes` is the clean-slate version of the same thing and
@@ -414,24 +418,20 @@ is 8 to the client and 4 to the server.
   linter and prettier is not installed. Adding prettier is a repo-wide diff and wants its own
   ticket; until then `lint frontend` is the whole frontend story, and the `fmt` header says so.
 
-**For the remaining ops tickets (ANV-39, 41) — from ANV-38:**
+**For ANV-41 — from ANV-38:**
 - **CI exists and is green, so every later ticket has a verifier.**
   [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs `Backend` and `Frontend` on every
   push to `main` and every pull request; `backend/tests/unit/test_ci_workflow.py` (64 tests) is what
-  guards it. **A push that only touches `docs/` runs neither job** — that is the path filter working,
-  not CI being broken.
+  guards it. **A push that only touches `docs/build-log.md` or `docs/ticket-log.md` runs neither
+  job** — that is the path filter working, not CI being broken. `docs/aws-deployment.md`,
+  `docs/architecture.md` and `docs/adr/**` *do* run the backend job, because tests read them.
 - **Adding a test that reads outside `backend/` means adding its path to the backend filter.**
   `test_ci_workflow.py` discovers those paths by scanning the test sources for `REPO_ROOT / …` and
   fails if one is not covered, so it will tell you — but it fails *after* you write the test, not
   before. Currently covered: `scripts/**`, `SignUpPage.jsx`, `frontend/package.json`, `README.md`,
-  `CLAUDE.md`, `.env.example`, `docker-compose.yml`, and — since ANV-40 — `.gitignore` and
-  `docs/aws-deployment.md`, the only `docs/` file in the filter.
-- **ANV-39 (docs):** the workflow's own header comment and `README.md`'s `## Continuous integration`
-  section are the current CI documentation, and a test asserts the README section names both jobs and
-  explains why the backend filter reaches into the frontend. **Two ADR-shaped decisions are already
-  argued in prose and want a home:** CI calls `scripts/` for the backend but `package.json` for the
-  frontend (the wrappers only add a container the runner does not need), and a path filter is
-  treated as coverage-deleting — which is why the backend filter is wider than `backend/**`.
+  `CLAUDE.md`, `.env.example`, `docker-compose.yml`, `.gitignore` (ANV-40),
+  `docs/aws-deployment.md` (ANV-40), and `docs/architecture.md` + `docs/adr/**` (ANV-39) — the only
+  three `docs/` entries. `docs/build-log.md` and `docs/ticket-log.md` are still in neither filter.
 - **ANV-41 (smoke):** a smoke job is a **third job in this workflow**, not a fourth top-level file,
   and it needs the boot sequence a service container cannot express (`up core` → `migrate` → `seed`)
   — so it wants `docker compose` on the runner rather than `services:`. If it adds `scripts/smoke`
@@ -451,7 +451,7 @@ is 8 to the client and 4 to the server.
   error for `production.cloudfront.docker.com`, which may recur.
 
 
-**For the last two tickets (ANV-39, 41) — from ANV-40:**
+**For ANV-41 — from ANV-40:**
 - **`backend/infra/` exists, is `validate`-clean, and has never been applied.** No AWS account has
   been touched and the running cost is $0.00. **Nothing in either remaining ticket should change
   that**: no `scripts/` pair, no CI job, no `terraform apply` / `destroy` / `plan` / `import`
@@ -462,28 +462,12 @@ is 8 to the client and 4 to the server.
   -recursive`. **Terraform is not installed on this machine and must not be installed** — unzip a
   release from `releases.hashicorp.com` into a scratch dir and run it by full path. The provider
   registry's DNS is flaky here in the same way Docker's is; **retry, it works on the second try**.
-- **ANV-39 (docs):** [`docs/aws-deployment.md`](./aws-deployment.md) is written and is the deploy
-  path plus the cost estimate; it is *not* an ADR and does not try to be. **Four ADR-shaped
-  decisions are already argued in prose there and in `backend/infra/README.md`, and want a home:**
-  (1) secrets are created empty and filled by hand, because a `secret_version` writes plaintext into
-  Terraform state and `sensitive = true` marks an output rather than state — the accepted cost is
-  that a task will not start until a human has filled every box; (2) `.tfvars` are **committed**,
-  against the usual advice, because these hold no secrets and a variable layout git ignores is a
-  variable layout nobody else has; (3) `local` is a variable set and **not a deployment**, existing
-  so the cost table has an honest floor and the compose stack and the Terraform are diffable;
-  (4) one ECR repository for three services, because compose runs one image. Also worth a line in
-  any docs index: `docs/aws-deployment.md` is the **first `docs/` file in the CI backend path
-  filter**, so editing it runs the backend job — that is a test doing its job, not a misconfiguration.
-- **ANV-39 (docs):** two **application** gaps were found writing the task definitions and are
-  documented rather than fixed, because ANV-40 changed no application code. They should appear in
-  whatever "known limitations" the docs ticket produces: **`S3Client` cannot talk to real S3** (its
-  MinIO default cannot be unset by omission and `""` is not `None` to botocore; and it deliberately
-  refuses a blank key pair, which is why the Terraform creates an IAM *user* rather than using the
-  task role) — tracked as `TODO(ANV-s3-aws)`, which a test pins to the exact assignment it annotates;
-  and **nothing uses TLS to Postgres or Redis**, because `Settings` builds a plain
-  `postgresql+asyncpg://` and a plain `redis://`, so `rds.force_ssl` or `transit_encryption_enabled`
-  alone would refuse every connection. Both are small application changes and each wants its own
-  ticket.
+- **The four ADR-shaped decisions ANV-40 left in prose now have records** (ANV-39): ADR-0009 (no
+  secret value in Terraform; secrets created empty), ADR-0010 (committed `.tfvars`, and `local` is
+  not a deployment) and ADR-0011 (one image and one ECR repository for three services). The two
+  **application** gaps it found are in [`architecture.md`](./architecture.md) §6: `S3Client` cannot
+  talk to real S3, and nothing uses TLS to Postgres or Redis. Both are small application changes
+  and each wants its own ticket.
 - **ANV-41 (smoke):** nothing in the smoke path goes near AWS. `POSTGRES_HOST` in the environment is
   still the one supported way to point host-side tooling somewhere else (ANV-37), and that is the
   *only* seam the infrastructure adds — there is no second DSN and no AWS-specific code path in
@@ -496,3 +480,26 @@ is 8 to the client and 4 to the server.
   you have added the field.
 - **`python-hcl2` is now a backend dev dependency**, for the one test module that parses HCL — the
   same argument that brought in `pyyaml` for `test_ci_workflow.py`.
+
+
+**For ANV-41 — from ANV-39 (the last carry-over):**
+- **The docs are drift-tested, so ANV-41 has obligations.** If a smoke script or job **adds a
+  route**, `docs/architecture.md`'s API surface table needs the row — `test_docs.py` compares it
+  against the live OpenAPI document in both directions and will fail the backend suite. If it adds a
+  `TODO(ANV-…)` marker under `app/` or `infra/`, the known-limitations table needs the row, same
+  deal. If it adds a `scripts/smoke` pair, that is a README table row (ANV-37) **and** a check that
+  `test_ci_workflow.py` can see the `.sh` half.
+- **`docs/architecture.md` and `docs/adr/**` are now in the CI backend path filter**, so editing
+  either runs the backend job. `docs/build-log.md` and `docs/ticket-log.md` still run nothing —
+  logging a ticket is free.
+- **`backend/docs/runbook.md` already documents the boot sequence ANV-41 needs** (`up core` →
+  `migrate` → `seed`, then `up frontend`; `reset-db --yes` for the clean slate) and every trap that
+  can break it, in a "when it will not come up" table. Extend that table rather than writing a
+  second one, and if the smoke path finds a new trap, it belongs there.
+- **The known-limitations table is where a smoke test's expectations come from.** `/portfolio`
+  fetches nothing at all, `/research` fetches `GET /v1/stocks` on mount, and the desktop renders
+  **empty** under jsdom because there is no `ResizeObserver` — so assert the securities panel and
+  the route `data-testid`, never a window.
+- **The backend `pytest` summary line does not survive this shell.** A full run prints its progress
+  and then nothing; `$LASTEXITCODE` is the reliable signal, and counts come from
+  `--collect-only -q` summed per file. Do not read "no summary" as "the run died".

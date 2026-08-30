@@ -2192,3 +2192,82 @@ The RDS parameter group had a fixed `name` *and* `create_before_destroy`. `famil
 the original still existed, under the same name, and failed the apply halfway through the riskiest
 operation the estate has. `name_prefix` fixes it. Nothing that stops at `validate` can see a name
 collision that only exists during a replacement; only reading the resource can.
+
+### ANV-39 — Done
+Commit `c19466c` on `main`, 20 files. **4,801 tests total** — 3,879 backend (3,547 before; +332)
+and 922 frontend, 99% backend coverage, `ruff check` / `ruff format --check` / `eslint` all clean.
+
+Shipped `docs/architecture.md` (the system diagram, the request path, the job path, the data model,
+the API surface and the known limitations, Mermaid throughout), `backend/docs/runbook.md`,
+`backend/docs/adding-an-endpoint.md`, eleven records in `docs/adr/` with an index, a `## Documentation`
+section in `README.md`, a drift-test section in `backend/docs/testing.md`, a conventions block in
+`CLAUDE.md` §6, and `backend/tests/unit/test_docs.py`.
+
+**The tests are the deliverable as much as the prose is**, because docs rot silently and nothing
+else in the repository fails when they stop being true. `test_docs.py` asserts: every repository
+path a document names exists (**discovered** from the documents' own code spans, not listed in the
+test, so a document that starts naming a file gets it checked); every relative markdown link
+resolves; **the documented API surface equals the live OpenAPI document in both directions**; the
+error-status table equals `ERROR_STATUS_CODES`; the walkthrough's seven layers are real `app/`
+directories and each listed file lives inside the one it is listed under; every `TODO(ANV-…)` the
+docs promise is still in the file they name **and** every marker in `app/`/`infra/` is in the
+limitations table; and the ADRs are numbered 1..n with no gaps, carry `Status`/`Context`/`Decision`/
+`Consequences` in order with real bodies, and agree with their index both ways.
+
+**The walkthrough follows one real endpoint, not an invented one.**
+`PATCH /v1/watchlists/{watchlist_id}/stocks/{stock_id}` — chosen because it is small and still
+touches everything: an ownership rule, a pure algorithm, a write, a transaction, a refusal whose
+*shape* is the security property, and a response the client renders directly. Its seven layers are
+`models → repos → domain → schemas → services → deps → api`, built bottom-up, and the three
+directories it does **not** touch (`middleware`, `clients`, `jobs`) are named with the reason.
+
+**The code contradicted `CLAUDE.md` in one place, and the code won.** §3's worked example
+("adding sync a stock's news") names a news repo module, `NewsService.sync_for_stock(symbol)`,
+`POST /v1/news/sync` and a news job module. **None of the four exist**: ANV-19 decided news is
+served straight from the vendor per request, with no repo and no table, because a third-party
+document with its own lifecycle buys a cache and a staleness problem. The example was written in
+ANV-1 to illustrate the *shape* before any of it existed. Recorded in ADR-0004 rather than by
+editing §3, because the example is still a good illustration and the disagreement is the useful
+fact. Two smaller ones: `backend/docs/testing.md` told a reader to mirror
+`app/services/watchlist.py` onto `tests/integration/test_watchlist_service.py`, which is not the
+convention the repository actually uses (`test_services_watchlist.py`) — fixed; and the compose
+`api` service is configured for Redis and MinIO and connects to **neither**, because nothing
+publishes a task from a route and **no router mounts `StorageService` at all**. The architecture
+diagram draws those two edges dashed and says so.
+
+**Eleven ADRs, and the count is a judgement call.** Six were named by the ticket (monorepo,
+async-first, uv, the layered backend, TanStack Router, Postgres + S3). ANV-38 left two decisions in
+prose and both got their own record — 0007 (CI calls `scripts/` for the backend and `package.json`
+for the frontend) and 0008 (a path filter is coverage) — because they are independent decisions with
+different forces, and folding them together would have been two decisions in one record. ANV-40 left
+four bullets and they became **three** records: "secrets created empty" is its own (0009); committed
+`.tfvars` and "`local` is not a deployment" are **one** record (0010), because they are the same two
+files answering the same question; and "one ECR repository" was written as the general rule it is an
+instance of — the AWS shapes are read off the local topology (0011). The known limitations are **not**
+ADRs; they are a table in `architecture.md` §6, because a limitation is a state, not a decision.
+
+**18 mutations, all 18 behaving as intended.** Killed: a renamed file in a documented path; a route
+row deleted from the API surface table; an invented route row; a real new route added to
+`app/api/health.py` with no row; a layer that is not a directory; a file listed under the wrong
+layer; `TODO(ANV-mail)` deleted from `app/services/auth.py`; a new undocumented `TODO(ANV-tls)` in
+`app/settings.py`; an ADR section renamed away; ADR sections shuffled out of order; an ADR renumbered
+to leave a gap; an ADR dropped from the index; a broken relative link; an emptied ADR section; the
+error-status table drifted from the middleware; and `docs/adr/**` removed from the CI path filter.
+**Three mutants are meant to survive and do** — rewording the walkthrough's title, an ADR's
+Decision paragraph, and the runbook's opening line. That is the point: **a document is allowed to be
+rewritten and is not allowed to become false**, so every assertion here is about a parsed artefact
+(the OpenAPI document, a directory, an annotated line, a resolved path) and none is about a sentence.
+It is ANV-38's and ANV-40's lesson stated as a design rule rather than learned again.
+
+**A consequence for every future writer, and it is the one surprise in the file.** Because paths are
+discovered from code spans, a sentence about a file that must **not** exist fails the suite. The
+first draft of ADR-0001 and of the runbook both said there is no `` `frontend/.env` `` and both
+failed. Phrase such a claim so the path is not a bare code span.
+
+`docs/architecture.md` and `docs/adr/**` are now the second and third `docs/` entries in the CI
+backend path filter, so editing either runs the backend job; `build-log.md` and `ticket-log.md`
+still run nothing, and `test_ci_workflow.py` asserts that.
+
+**Ruff formats Python code blocks inside Markdown.** `ruff format --check` flagged
+`backend/docs/adding-an-endpoint.md` for missing blank lines between top-level definitions in two
+fenced `python` blocks. Worth knowing before writing another backend doc: run `fmt` on it.
