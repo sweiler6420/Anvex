@@ -4,7 +4,7 @@ The checklist behind `scripts/smoke.ps1` / `scripts/smoke.sh` (ANV-41). Twenty s
 order, from `docker compose up` to loading `/research` in a DOM with nothing but a refresh
 token.
 
-**This is the only thing in the repository that proves the pieces fit together.** 3,995
+**This is the only thing in the repository that proves the pieces fit together.** 3,998
 backend tests, 922 frontend tests, a `validate`-clean Terraform tree and a green CI each
 prove one component with its neighbours replaced by fixtures. None of them would notice if
 the API container could not reach Postgres by service name, if the published port were

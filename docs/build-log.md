@@ -108,7 +108,7 @@ modified. What each contributes to Anvex:
 | ANV-39 | Documentation and ADRs | **Done** — *architecture, runbook, walkthrough, 11 ADRs, all drift-tested* |
 | ANV-41 | E2E smoke | **Done** — *20 steps, green from a destroyed-volume clean slate.* **The backlog is complete.** |
 
-**4,917 tests total** — **3,995 backend** and **922 frontend**, all in-container. 99% backend
+**4,920 tests total** — **3,998 backend** and **922 frontend**, all in-container. 99% backend
 coverage; `ruff check`, `ruff format --check` and `eslint` all clean. Container tiers genuinely
 execute: **276 DB**, **29 S3**, **9 broker**.
 
@@ -432,7 +432,9 @@ A monorepo replacing three read-only repositories (`AverageInvestorApi`,
 ## What is proven end to end
 
 `scripts/smoke` — [`smoke.md`](./smoke.md) — twenty steps against the real containers, green
-from a **destroyed-volume clean slate** in 27 seconds and against a warm stack in 12:
+from a **destroyed-volume clean slate** in 27 seconds, against a warm stack in 12, and **green
+in CI**, which is the only machine that has never seen this repository and builds both images
+from nothing:
 
 > `docker compose up` → `alembic upgrade head` → seed → API liveness and readiness → a CORS
 > preflight → register → log in → exchange a token pair → read the seeded roster → a
@@ -462,9 +464,11 @@ easiest artefact in a repository to over-read.
 - **No mail, no `/portfolio` fetch, no real browser.** The cold load is jsdom, which has no
   layout — the research desktop renders **empty** there, which is why the assertion is on
   the securities panel and not on a window.
-- **The images were cached locally.** `--clean` destroys the volumes, not `anvex/api:dev`.
-  Only the CI smoke job builds from nothing, and that is the half a developer's machine can
-  never claim.
+- **On a developer's machine the images are cached.** `--clean` destroys the volumes, not
+  `anvex/api:dev`. Only the CI smoke job builds from nothing — it does, and it is green, but
+  that is the half a developer's box can never claim for itself. It is also the half that
+  found the one real portability bug: the `web` container is uid 1000 and a Linux checkout is
+  not, so building into the bind-mounted `/app/dist` was `EACCES` on the runner and fine here.
 - **The S3 test tier still skips in CI** — 14 tests, for the `minio/minio` entrypoint reason
   in [`architecture.md`](./architecture.md) §6.
 

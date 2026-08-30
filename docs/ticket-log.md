@@ -2273,10 +2273,11 @@ still run nothing, and `test_ci_workflow.py` asserts that.
 fenced `python` blocks. Worth knowing before writing another backend doc: run `fmt` on it.
 
 ### ANV-41 — Done · **the last ticket; the backlog is complete**
-Commit `5dfc945`, 13 files, 122 new tests (3,873 → **3,995** backend; frontend
-unchanged at 922). **Verified independently:** the full suite green, `ruff check`,
-`ruff format --check` and `eslint` clean, and the smoke run itself green **twice** — once from a
-destroyed-volume clean slate (27 s) and once against a warm stack (12 s).
+Commits `5dfc945`, `f189cc3`, `08c68c0`, 15 files. **Verified independently:** the full suite
+green, `ruff check`, `ruff format --check` and `eslint` clean, the smoke run green **twice**
+locally — once from a destroyed-volume clean slate (27 s) and once against a warm stack (12 s)
+— and **green in CI**, which is the one machine that has never seen this repository and builds
+both images from nothing.
 
 `scripts/smoke.{ps1,sh}` + `backend/scripts/smoke.py` + [`docs/smoke.md`](./smoke.md). **Twenty
 steps**, `docker compose up` → migrate → seed → health → CORS → register → log in → exchange a
@@ -2354,6 +2355,22 @@ weakened to `password`; the email domain changed back to `.invalid`; a `SmokeFai
 `expected`; the ingest task published despite a configured key; `--live-vendor` added to the CI job;
 `docs/smoke.md` dropped from the CI path filter; the vendor stub made to answer anything; and the
 `.sh` half of the pair gutted.
+
+**CI found the one thing three local runs could not, and it took two pushes to read it.** The
+first run reached **step 19 of 20** and died at `npm run build`: the `web` container is uid 1000,
+compose bind-mounts the host's `frontend/` over `/app`, Windows mounts ignore ownership and Linux
+does not — so creating `/app/dist` is `EACCES` on a runner whose checkout belongs to uid 1001. The
+smoke now builds into a container-local `/tmp`, which is the rule `vite.config.js`'s `cacheDir` and
+compose's `beat --schedule` already followed, and which also stops a smoke run clobbering the
+`dist/` a developer is looking at.
+
+**Reading that failure needed its own fix, and it is the more transferable one.** A public
+repository's Actions **log** answers 403 without a token; its **annotations** do not. The whole
+design of this script is that a failure names the step, what it expected and what it saw — and on
+the first red run none of that was reachable from outside. The job now re-emits the `FAILED at
+step …` block as `::error::` lines. Starting at that marker rather than tailing the log matters:
+GitHub keeps about ten annotations per step, and the first attempt's blind `tail` spent all ten on
+the *beginning* of the failing command's output instead of on the diagnosis.
 
 **Also:** `backend/scripts/*.py` is scanned by `test_infra_terraform.py`'s "local development never
 depends on the infrastructure" test, so a smoke driver may not name the infrastructure tooling even
