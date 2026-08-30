@@ -1,0 +1,285 @@
+# Anvex CI (ANV-38).
+#
+# Two independent jobs behind a path filter, and **neither of them re-spells a command the
+# repository already owns**. ANV-37 put every developer command in `scripts/` precisely so
+# there is one implementation of "lint the backend" and one of "run the backend suite"; a
+# workflow with its own `uv run python -m pytest` is the second implementation that ticket
+# existed to delete. So the backend job calls `scripts/lint.sh` and `scripts/test.sh`, and
+# the frontend job calls the `package.json` scripts that `scripts/lint.sh frontend` and
+# `scripts/test.sh frontend` themselves call. The only thing those wrappers add is
+# `docker compose exec -T web`, which exists because the dev host has no node — a Linux
+# runner does, so the container would be pure cost.
+#
+# Three things here are load-bearing and must survive an edit:
+#
+#   * **The backend job checks out the whole repository.** `backend/tests/unit/` reads
+#     `frontend/src/features/auth/components/SignUpPage.jsx` (the password-policy drift
+#     test), `scripts/`, `README.md`, `CLAUDE.md` and `.env.example`. Those tests *fail*
+#     rather than skip when the file is missing, so a sparse checkout or a backend-only
+#     image breaks them. See the `backend` path filter, which lists the same files.
+#   * **`pwsh` is asserted, not assumed.** `test_repo_scripts.py` parses the `.ps1` halves
+#     with the real PowerShell parser and *skips* when no interpreter is found. Skipping is
+#     right on a developer's box; here it would mean half the script set goes unparsed
+#     forever without anyone noticing. The runner image ships PowerShell 7, so the step
+#     costs nothing and fails loudly if that ever stops being true.
+#   * **Nothing sets `NODE_ENV`.** Vite honours an inherited `NODE_ENV` over its own mode,
+#     so `NODE_ENV=development` silently ships a development bundle — no warning, no error,
+#     just a slower app. `Assert the bundle is a production build` is the tripwire.
+#
+# `.github/workflows/ci.yml` is itself in both filters: a change to this file must run
+# everything it configures.
+
+name: CI
+
+on:
+  # Direct pushes to `main` are how this repository is developed, so that is the branch
+  # worth building. Feature branches get their run from the pull request instead, which is
+  # also what keeps a PR branch from building twice on every push.
+  push:
+    branches: [main]
+  pull_request:
+
+# One run per ref. A push that supersedes an in-flight run cancels it rather than queueing
+# behind it; the older run's result is about code nobody has any more.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only. Nothing here publishes, comments or tags. `pull-requests: read` is what
+# `dorny/paths-filter` needs to list a pull request's files through the API.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  # --------------------------------------------------------------- which stacks changed
+  #
+  # `on.<event>.paths` filters the *workflow*, not a job, so per-stack filtering needs a
+  # job that computes the answer and two `if:`s that consume it.
+  #
+  # **The backend filter deliberately reaches outside `backend/`.** Backend tests read
+  # files that live elsewhere in the repo, and a filter that missed them would silently
+  # disable the guards they are:
+  #
+  #   frontend/src/features/auth/components/SignUpPage.jsx  the password-rule drift test —
+  #       the one thing stopping the client and server policies diverging (ANV-43)
+  #   frontend/package.json                                 test_ci_workflow.py
+  #   scripts/                                              test_repo_scripts.py
+  #   README.md                                             its `## Scripts` table
+  #   CLAUDE.md                                             test_settings.py's repo-root probe
+  #   .env.example                                          test_settings.py's key parity
+  #   docker-compose.yml                                    the service names the scripts use
+  #
+  # A frontend-only commit that edits `SignUpPage.jsx` therefore runs the backend job too.
+  # That is the whole point: skipping it there is exactly how the cross-stack guard would
+  # stop guarding without anyone editing a test.
+  changes:
+    name: Which stacks changed
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'scripts/**'
+              - 'frontend/src/features/auth/components/SignUpPage.jsx'
+              - 'frontend/package.json'
+              - 'README.md'
+              - 'CLAUDE.md'
+              - '.env.example'
+              - 'docker-compose.yml'
+              - '.github/workflows/ci.yml'
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/ci.yml'
+
+  # ------------------------------------------------------------------------- backend job
+  backend:
+    name: Backend
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+
+    # The two tiers of the suite that need a live server. Everything else — the unit tier,
+    # the API tier, the respx-mocked clients — needs nothing at all, which is why the suite
+    # is green with Docker stopped on a developer's machine. Here the services are present,
+    # so those tiers must actually *run*; `Assert the service tiers are reachable` below is
+    # what stops a wiring mistake turning into a silent skip and a green tick.
+    #
+    # There is deliberately no MinIO service: its image needs `server /data` as an argument
+    # and a service container cannot pass one. The S3 tier skips, and says so in the run's
+    # output. Bringing it back means an image with a default command, or a `docker run`
+    # step — a decision for its own ticket, not a workaround hidden in this file.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          # The harness borrows user/password from the application `Settings` (whose
+          # defaults are these) and takes the database name from `POSTGRES_TEST_DB`.
+          POSTGRES_USER: anvex
+          POSTGRES_PASSWORD: anvex
+          POSTGRES_DB: anvex_test
+        ports:
+          - 5432:5432
+        # `-U`/`-d` matter: a bare `pg_isready` answers while the entrypoint is still
+        # running init scripts against a temporary, socket-only server.
+        options: >-
+          --health-cmd "pg_isready -U anvex -d anvex_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+
+    # Real environment variables beat the `.env` file in pydantic-settings, and there is no
+    # `.env` on a runner anyway (it is gitignored — `.env.example` is the checked-in copy).
+    # These are the same keys `.env.example` documents, with the host-side values a runner
+    # needs: the services publish on their standard ports here, not on the 5433/5442 the
+    # local compose stack uses to stay clear of a natively installed Postgres.
+    env:
+      POSTGRES_USER: anvex
+      POSTGRES_PASSWORD: anvex
+      POSTGRES_TEST_HOST: localhost
+      POSTGRES_TEST_PORT: "5432"
+      POSTGRES_TEST_DB: anvex_test
+      REDIS_HOST_PORT: "6379"
+
+    steps:
+      # No `sparse-checkout`, and no `path` narrowing: see the header. The backend suite
+      # reads five files outside `backend/` and fails, not skips, without them.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      # `--locked` rather than a plain sync: a `pyproject.toml` edit that never regenerated
+      # `uv.lock` fails here, loudly, instead of resolving to something no developer has.
+      - name: Sync dependencies
+        working-directory: backend
+        run: uv sync --locked
+
+      # `test_repo_scripts.py` parses every `.ps1` with the real PowerShell parser and
+      # skips when neither `pwsh` nor `powershell` is on PATH. Without this step a runner
+      # image that dropped PowerShell would turn eleven parser tests into eleven silent
+      # skips.
+      - name: Ensure PowerShell is available
+        run: pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+
+      # `ruff check` **and** `ruff format --check`, in one command that a developer runs
+      # the same way. The formatter gate is the point: ANV-15 found `ruff format` would
+      # have rewritten 37 files, because `ruff check` alone had been passing all along.
+      # An unenforced formatter drifts back within a few tickets.
+      - name: Lint
+        run: ./scripts/lint.sh backend
+
+      # The harness's own reachability probes, asked directly. Every tier skips rather than
+      # fails when its service is absent (CLAUDE.md §6) — correct on a developer's machine,
+      # useless here, where a mistyped port would produce a green run that tested nothing.
+      # This is the assertion that the services above are actually wired to the suite.
+      - name: Assert the service tiers are reachable
+        working-directory: backend
+        run: |
+          uv run python - <<'PY'
+          from tests import broker, database
+
+          for name, reason in (
+              ("postgres", database.unavailable_reason()),
+              ("redis", broker.unavailable_reason()),
+          ):
+              assert reason is None, f"the {name} tier would skip: {reason}"
+              print(f"{name}: reachable")
+          PY
+
+      # Coverage: `--cov=app --cov-report=term-missing` is already in `pyproject.toml`'s
+      # addopts, so the terminal report comes for free; `--cov-report=xml` adds the machine
+      # -readable copy uploaded below. Extra arguments after the target go straight to the
+      # runner, which is what `scripts/test.sh` is for.
+      - name: Test
+        run: ./scripts/test.sh backend --cov-report=xml -rs
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          if-no-files-found: error
+          retention-days: 14
+
+  # ------------------------------------------------------------------------ frontend job
+  #
+  # 922 tests in about thirteen seconds, and **no services at all** — no database, no
+  # Redis, no object store, no API. So this job shares nothing with the backend's and does
+  # not wait for it.
+  frontend:
+    name: Frontend
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      # The whole repo again, and for a related reason: `vite.config.js` sets `envDir` to
+      # the repository root, one level above `frontend/`. A checkout of `frontend/` alone
+      # builds against a root that is not there.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # `package.json` says `engines.node >= 22`.
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # `ci`, not `install`: the lockfile is the input, and a resolution that differs from
+      # the committed one should fail rather than quietly proceed.
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Test
+        working-directory: frontend
+        run: npm run test
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+      # The one build assertion worth making. Vite honours an inherited `NODE_ENV` over its
+      # own mode, so a `NODE_ENV=development` anywhere in the environment produces a
+      # development bundle — React's dev runtime, `jsxDEV` calls, no minification of the
+      # things that matter — with no warning and an exit code of 0. `jsxDEV` appears in
+      # every development build and in no production one, so counting it is the cheapest
+      # possible discriminator.
+      - name: Assert the bundle is a production build
+        working-directory: frontend
+        shell: bash
+        run: |
+          test -f dist/index.html
+          count=$(cat dist/assets/*.js | grep -c 'jsxDEV' || true)
+          echo "jsxDEV occurrences in dist: $count"
+          if [ "$count" -ne 0 ]; then
+            echo "::error::dist/ is a development bundle - something set NODE_ENV"
+            exit 1
+          fi

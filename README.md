@@ -91,6 +91,44 @@ is still one place to change it. Set `POSTGRES_HOST` yourself and they leave it 
 `backend/scripts/` keeps the backend-only entry points (`seed_politicians.py`); `scripts/`
 only ever wraps them, so there is one implementation of each behaviour.
 
+## Continuous integration
+
+[`.github/workflows/ci.yml`](./.github/workflows/ci.yml) runs on every push to `main` and on
+every pull request. Two jobs, gated on a path filter so each stack only builds when it
+changes:
+
+| Job | What it runs | Services |
+| --- | --- | --- |
+| **Backend** | `uv sync --locked`, then `scripts/lint.sh backend` (`ruff check` + `ruff format --check`) and `scripts/test.sh backend` with coverage | Postgres 16 and Redis 7 |
+| **Frontend** | `npm ci`, `npm run lint`, `npm run test`, `npm run build` | none |
+
+**The workflow calls the scripts rather than repeating them.** Every trap the backend
+commands carry — `python -m pytest` and never the console script, the cleared `VIRTUAL_ENV`
+— is encoded once, in `scripts/`, and `backend/tests/unit/test_repo_scripts.py` is what keeps
+the two halves of that directory honest. The frontend job calls the `package.json` scripts
+directly, because the only thing `scripts/lint.sh frontend` adds is
+`docker compose exec -T web`, and that exists solely because the dev host has no node.
+
+Four things in there are deliberate and are asserted by
+`backend/tests/unit/test_ci_workflow.py`:
+
+- **The backend filter reaches into the frontend.** It matches
+  `frontend/src/features/auth/components/SignUpPage.jsx`, because
+  `tests/unit/test_domain_password.py` parses that file to keep the client and server
+  password policies from drifting. A filter of `backend/**` alone would skip the backend job
+  on exactly the commit that guard exists for. `README.md`, `CLAUDE.md`, `.env.example`,
+  `docker-compose.yml` and `scripts/` are in it for the same reason.
+- **Both jobs check out the whole repository.** Those tests *fail* rather than skip when a
+  file is missing, and Vite's `envDir` points one level above `frontend/`.
+- **The service tiers are asserted reachable** before the suite runs. Every tier skips
+  politely when its service is absent, so a mistyped port would otherwise produce a green
+  run over a suite that tested nothing. MinIO is *not* a service container — its image needs
+  `server /data` as an argument and a service container cannot pass one — so the S3 tier
+  skips in CI and says so in the log.
+- **Nothing sets `NODE_ENV`,** and the build is checked for `jsxDEV` afterwards. Vite honours
+  an inherited `NODE_ENV` over its own mode, so `NODE_ENV=development` ships a development
+  bundle with no warning and exit code 0.
+
 ## Development
 
 Backend dependencies are managed with [uv](https://docs.astral.sh/uv/); run from `backend/`:

@@ -36,6 +36,10 @@ dev = [
     "respx",
     "ruff",
     "faker",
+    # Test-only, and only for one module: `tests/unit/test_ci_workflow.py` parses
+    # `.github/workflows/ci.yml` with a real YAML parser rather than with regexes over
+    # it (ANV-38). Nothing in `app/` reads YAML.
+    "pyyaml",
 ]
 
 [build-system]
