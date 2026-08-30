@@ -18,7 +18,7 @@ Anvex/
 ├── CLAUDE.md             # this file
 ├── docker-compose.yml    # local dev: postgres, redis, minio, api, worker, beat, web
 ├── docs/                 # cross-stack docs; docs/adr/ holds architecture decision records
-├── scripts/              # repo-wide dev scripts (up, down, migrate, seed, test, lint)
+├── scripts/              # repo-wide dev scripts, paired .ps1 + .sh (see below)
 ├── backend/
 │   ├── Dockerfile
 │   ├── pyproject.toml    # uv-managed. NO requirements.txt anywhere.
@@ -38,6 +38,42 @@ Anvex/
 
 Anything that does not fit one of these homes does not get a new top-level folder without an ADR
 in `docs/adr/`.
+
+### `scripts/` — the developer commands (ANV-37)
+
+`up`, `down`, `logs`, `migrate`, `makemigration`, `seed`, `test`, `lint`, `fmt`, `reset-db`.
+
+- **Every command is a pair — `<name>.ps1` and `<name>.sh` — and the two halves are one program
+  in two languages.** Same command line, same flags, same services, same printed lines.
+  `backend/tests/unit/test_repo_scripts.py` compares them and fails on drift, so adding a command
+  means adding both halves plus a row in the README table. Nothing else belongs in this directory.
+- **Shared behaviour lives in `_common.{ps1,sh}`**, which is sourced and never run: repo-root
+  resolution, uv resolution, the compose wrapper, the `web`-container wrapper, the `.env` reader
+  and the confirmation prompt. A command script calls those, not `docker` or `uv` directly.
+- **The PowerShell halves parse `--flag` by hand rather than declaring `[switch]` parameters**, so
+  a command line pastes into either shell unchanged. A `[switch]$Volumes` answers only to
+  `-Volumes`, and PowerShell binds a bare `--volumes` positionally — the idiomatic spelling makes
+  the two halves two different programs, quietly.
+- **Native exit codes are checked by hand, inside an `$ErrorActionPreference = 'Continue'` window.**
+  Windows PowerShell converts a native command's stderr into a *terminating* error whenever the
+  caller redirects it, and `docker compose` writes its progress to stderr — so a healthy `up` kills
+  a script run as `.\up.ps1 2>&1`. The child's exit code is the only thing allowed to mean failure.
+- **Backend commands are `uv run <tool>` from `backend/` with `VIRTUAL_ENV` cleared**, and **pytest
+  is always `python -m pytest`, never the `pytest` console script** — an Application Control policy
+  on the dev machine blocks the generated shim with `os error 4551`.
+- **Frontend commands are `docker compose --profile frontend exec -T web …`**, preceded by
+  `up -d --no-deps web`. The `-T` is required (without it they hang in any non-interactive shell)
+  and `--no-deps` keeps a lint run from starting the database. **Nothing sets `NODE_ENV`.**
+- **Host-side database tooling translates `.env`'s `POSTGRES_HOST=db` to `localhost` and the
+  published port**, and only when `.env` still says `db` and the environment carries no override.
+  `db` is a compose service name that resolves only inside the network, while alembic and the seed
+  script run on the host. That translation lives in `_common` and nowhere else: there is still one
+  DSN, in one `.env`.
+- **`backend/scripts/` keeps backend-only entry points; `scripts/` only ever wraps them**, so a
+  behaviour has one implementation and a Celery job can call the same service method.
+- **A test that compares two implementations cannot see a mistake they both make.** The parity
+  tests above were green while both halves invoked `uv <tool>` instead of `uv run <tool>`. Where a
+  shape is load-bearing and shared, pin it *per language* as well as comparing the halves.
 
 ---
 

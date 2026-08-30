@@ -94,12 +94,18 @@ modified. What each contributes to Anvex:
 | ANV-35 | Interactive desktop demo | **Done** |
 | ANV-36 | Research and Portfolio pages | **Done** — *the frontend is complete* |
 | ANV-43 | Backend password strength policy | **Done** — *found by ANV-30; E3 gap closed* |
-| ANV-37 | Developer scripts | Next |
-| ANV-38 … ANV-41 | see `backlog.md` | Not started |
+| ANV-37 | Developer scripts | **Done** |
+| ANV-38 | CI pipeline | Next |
+| ANV-39 … ANV-41 | see `backlog.md` | Not started |
 
-**3,897 tests total** — **2,975 backend** (2,656 with Docker stopped, DB/S3/broker tiers skipping)
+**4,160 tests total** — **3,238 backend** (2,919 with Docker stopped, DB/S3/broker tiers skipping)
 and **922 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check`
 and `eslint` all clean. Container tiers genuinely execute: **276 DB**, **29 S3**, **9 broker**.
+
+**Run everything through `scripts/`** (ANV-37): `up`, `down`, `logs`, `migrate`, `makemigration`,
+`seed`, `test`, `lint`, `fmt`, `reset-db`, each a `.ps1`/`.sh` pair taking the same command line.
+`scripts\test.ps1` is the whole suite, `scripts\lint.ps1` is ruff + `ruff format --check` + eslint.
+They already encode every trap in the table above, so a session that uses them cannot fall into one.
 
 **Cosmetic issues in the ported marketing copy, flagged and deliberately NOT changed** (they are
 Stephen's, and each changes appearance):
@@ -372,11 +378,7 @@ is 8 to the client and 4 to the server.
 - **ANV-41 (smoke):** any smoke script that registers an account needs a password satisfying the
   policy. `"Correct-horse-battery1"` is the value the suites standardised on.
 
-**For the remaining ops tickets (ANV-37, 38, 39, 41) — from ANV-36:**
-- **ANV-37 (scripts):** frontend wrappers are `docker compose --profile frontend exec -T web …` and
-  nothing else. The **`-T` is required** — without it these hang in a non-TTY shell. A build script
-  must mount the **repo root**, not `frontend/`, because `envDir` reaches one level up. **Never set
-  `NODE_ENV`.** Backend: always `uv run python -m pytest`, never `uv run pytest`.
+**For the remaining ops tickets (ANV-38, 39, 41) — from ANV-36:**
 - **ANV-38 (CI):** the frontend suite is **922 tests in ~13 s and needs no services** — `web` alone,
   no db/redis/minio, so that job can be fast and independent of the backend's. Two traps: the build
   must be asserted to emit **`jsxDEV: 0`** (an inherited `NODE_ENV=development` silently ships a
@@ -398,3 +400,29 @@ is 8 to the client and 4 to the server.
   guard, the interceptor, the rotation and the API in one go.
 - **Known follow-ups worth tickets:** desktop layout persistence (needs an API endpoint — there is
   none), and a holdings model + quote source before `/portfolio` can be real.
+
+**For the remaining ops tickets (ANV-38, 39, 40, 41) — from ANV-37:**
+- **ANV-38 (CI): call `scripts/`, do not re-spell the commands in YAML.** Every trap the workflow
+  could hit is already encoded there, and a workflow with its own copy of `uv run python -m pytest`
+  is the second implementation this ticket exists to prevent. The Linux runner uses the `.sh` half;
+  `backend/tests/unit/test_repo_scripts.py` is what keeps it equal to the `.ps1` half. Practical
+  notes: the backend job needs **the whole repo checked out** (that suite reads `scripts/` *and*
+  `frontend/src/.../SignUpPage.jsx`); `scripts/lint.sh backend` is already `ruff check` +
+  `ruff format --check`; `scripts/test.sh frontend` starts `web` with `--no-deps`, so the frontend
+  job needs no services; and **`scripts/` has no `build` command** — ANV-38 either adds one as a
+  pair (plus a README row, or the smoke test fails) or builds inline. If it adds one, the build
+  must mount the **repo root**, not `frontend/`, because Vite's `envDir` reaches one level up.
+- **ANV-38 also inherits two parser tests that skip on a runner:** `sh -n` is present on Linux, but
+  `powershell`/`pwsh` may not be — the `.ps1` half then goes unparsed. Installing `pwsh` on the
+  frontend or lint job is a cheap way to keep both halves genuinely checked in CI.
+- **ANV-40 (AWS skeleton):** `migrate`, `seed` and `reset-db` reach Postgres by translating `.env`'s
+  `POSTGRES_HOST=db` to `localhost` plus the published port, in `_common` only. Anything that runs
+  those against a real RDS just sets `POSTGRES_HOST` in the environment — the translation stands
+  aside when it is set. Do not add a second DSN.
+- **ANV-41 (smoke):** `scripts/smoke` should be a pair like everything else and will need a README
+  row. The boot sequence it documents already exists and is verified: `up core` → `migrate` →
+  `seed`, then `up frontend`. `reset-db --yes` is the clean-slate version of the same thing and
+  runs end to end in about 25 seconds.
+- **Where `fmt` stops:** it is backend-only, because the frontend has no formatter — eslint is a
+  linter and prettier is not installed. Adding prettier is a repo-wide diff and wants its own
+  ticket; until then `lint frontend` is the whole frontend story, and the `fmt` header says so.

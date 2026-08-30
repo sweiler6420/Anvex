@@ -1911,3 +1911,82 @@ the API's `ÄNDERUNG1€` registration. `failed_rules()` truncated to the first 
 every `describe_failures` sentence. A rule id renamed in the **domain** → 3 drift failures. The
 client's `\p{Lu}` regex changed to `[A-Z]` → the pinned-predicate tripwire. The client's `missing`
 phrase reworded → the phrasing-agreement test. Every mutant was reverted and the suite re-run green.
+
+### ANV-37 — Done
+Commit `55c24fb`, 24 files, 263 new tests (2,975 → **3,238** backend). **Verified independently:**
+3,195 pass with `db-test` up (43 skipped: S3 and broker containers down), 2,919 with Docker
+stopped, 922 frontend, `ruff check`, `ruff format --check` and `eslint` clean — and every number
+above was produced *by the scripts themselves*.
+
+**Every script was executed, not just written.** `up core` boots db/redis/minio/minio-init/api;
+`migrate` runs both revisions on a fresh database; `seed` writes 54 rows and repeats identically;
+`makemigration "anv 37 script smoke"` generated an empty revision through the ruff post-write hook
+(and confirmed models and migrations still agree — it was deleted afterwards); `logs` follows;
+`lint`, `fmt` and `fmt --check` run clean; `test` runs 3,195 backend and 922 frontend; `reset-db
+--yes` destroys the volume, recreates, migrates and seeds in ~25 s; `down` and `down --volumes
+--yes` tear down. Most were run in **both** shells and their output compared line for line.
+
+**The pairing needs a test or it is a lie, and this one earned its keep three times.**
+`test_repo_scripts.py` parses each half with the real parser — `[Parser]::ParseFile` and `sh -n` —
+then compares the pair on six derived facts: compose services, significant flags, tool
+invocations, helper-call *counts*, the strings printed to the developer, and the `Usage:` line.
+Comments are stripped first, because the prose *should* differ.
+
+**Drift #1, caught before the scripts ever ran: `[switch]` parameters.** `down.sh` took `--yes`;
+`down.ps1` took `-Yes`, because that is idiomatic PowerShell. The flags fact failed. The fix was
+not to relax the test: the PowerShell halves now parse `--flag` by hand, so one command line pastes
+into either shell. **Drift #2 came from the same decision**: `param()` with a `[Parameter()]`
+attribute makes a script *advanced*, and PowerShell then matches its own common parameters by
+prefix — `test backend -p no:cacheprovider` bound `-p` to `-PipelineVariable` and failed before the
+script ran, and `-v` would have become `-Verbose`. Both are ordinary pytest flags. The scripts read
+`$args` and declare no `param()` block at all.
+
+**Two bugs the parity tests could not see, because both halves were wrong the same way.** `uv
+<tool>` is not `uv run <tool>` — uv answered `unrecognized subcommand 'ruff'` in both shells,
+identically, and every parity test was green. And **Windows PowerShell turns a native command's
+stderr into a *terminating* error whenever the caller redirects it**, so `docker compose`'s
+progress output killed a perfectly healthy `up` under `2>&1`; `Invoke-Native` now checks the exit
+code inside an `$ErrorActionPreference = 'Continue'` window and nothing else is allowed to mean
+failure. Both were found by *running* the scripts, and both are now pinned **per language** — the
+general lesson, and it is in `CLAUDE.md`: a test that compares two implementations cannot see a
+mistake they both make.
+
+**The host/container database split, decided rather than worked around.** `.env` says
+`POSTGRES_HOST=db` because that is what the api, worker and beat containers dial; alembic and the
+seed script run on the host, where `db` resolves to nothing. `_common` translates it to `localhost`
+plus the published port — **only** when `.env` still says `db` and the environment carries no
+override, so a developer who repoints it is left alone and ANV-40's RDS target just sets the
+variable. One DSN, one `.env`, one translation. The alternative — running them in the `api`
+container — fails for `makemigration` specifically: `alembic.ini` lints every generated revision
+with a ruff post-write hook, and ruff is a dev dependency the runtime image deliberately omits.
+
+**Judgement calls worth knowing.** `lint` includes `ruff format --check` (a diff nobody formatted
+should fail in lint, not in review). `fmt` is **backend-only and says so in its header** — the
+frontend has no formatter, eslint is a linter, and adding prettier is a repo-wide diff that wants
+its own ticket. `test frontend` starts `web` with **`--no-deps`**, because vitest and eslint need
+no api, database, broker or object store — which is also what makes the frontend CI job
+independent. `reset-db` touches only the *dev* database: `db-test` is tmpfs with no named volume
+and starts empty by construction. The volume name `anvex_pgdata` is hardcoded because
+`docker-compose.yml` pins `name: anvex`, so the prefix cannot drift with the clone directory.
+`reset-db` spells out its migrate and seed steps rather than shelling out to the sibling scripts —
+a nested `.ps1`'s exit code does not propagate on its own, and a reset that reports success after a
+failed migration is worse than no reset. Both destructive commands prompt unless given `--yes`.
+
+**18 mutations, 18 killed after two rounds; the two initial survivors both improved the suite.**
+Deleting `logs.sh` → 17 failures. An unbalanced brace in `up.ps1` → the PowerShell parser alone; a
+deleted `fi` in `down.sh` → `sh -n` alone. `python -m pytest` → `pytest` → the console-script test.
+Dropping `-T` → the TTY test *and* the flags fact. Dropping `--no-deps`, and dropping `--stop` from
+`reset-db.ps1` → the flags fact. Rewording one message in `up.ps1` → the messages fact. Dropping
+`api` from `up.sh`'s core target → the services fact. `npm run lint` → `npm run test` in `lint.ps1`
+→ the tools fact. Setting `NODE_ENV` → the NODE_ENV test. Clearing an executable bit → the git-mode
+test. Changing one `Usage:` line → the usage test. Removing `Use-HostDatabase` from `migrate.ps1` →
+the helper-count fact. **Survivor 1:** renaming the `reset-db` row in the README passed, because the
+name also appears in the prose around the table — the test now reads the table's command column and
+also refuses names that are not commands. **Survivor 2:** dropping `uv run`, and then dropping the
+`VIRTUAL_ENV` clearing, passed in *both* halves — those are the per-language assertions described
+above. Every mutant was reverted and the file hashes checked against a pre-mutation backup.
+
+**Skips are deliberate and narrow.** Only the two parser tests skip, and only when the interpreter
+is absent — a POSIX shell on a bare Windows box, PowerShell on a Linux runner. Missing, unpaired,
+undocumented or divergent scripts *fail*, on any machine. `sh` is located by falling back to the
+Git for Windows installation, since it is not on PATH here.
