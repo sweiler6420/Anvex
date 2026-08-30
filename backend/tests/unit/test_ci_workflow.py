@@ -429,6 +429,26 @@ class TestNothingIsReSpelled:
         assert failure_steps, "a smoke failure leaves no way to see what the stack was doing"
         assert any("compose" in str(step.get("run")) for step in failure_steps)
 
+    def test_a_smoke_failure_is_readable_without_a_token(self) -> None:
+        """A run's log needs a token; its **annotations** do not, and this repo is public.
+
+        The whole design of `scripts/smoke` is that a failure names the step, what it
+        expected and what it saw. Learned the hard way on ANV-41's first push: the job went
+        red, the log answered 403, and the diagnosis the script had carefully produced was
+        unreadable from outside. Re-emitting the tail as `::error::` puts it in the checks
+        API, which answers unauthenticated.
+        """
+        failure_steps = [step for step in steps("smoke") if step.get("if") == "failure()"]
+        commands = " ".join(str(step.get("run")) for step in failure_steps)
+        assert "::error::" in commands, "a smoke failure is unreadable without a token"
+        assert "smoke.log" in commands
+
+    def test_the_smoke_output_is_captured_without_swallowing_the_exit_code(self) -> None:
+        """`cmd | tee` reports `tee`'s status, so a failed run would be a green step."""
+        commands = " ".join(run_steps("smoke"))
+        if "| tee" in commands:
+            assert "pipefail" in commands, "the smoke output is piped without `set -o pipefail`"
+
     def test_the_frontend_job_covers_the_four_things_the_ticket_asks_for(self) -> None:
         commands = " ".join(run_steps("frontend"))
         assert "npm ci" in commands

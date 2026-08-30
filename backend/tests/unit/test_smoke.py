@@ -39,6 +39,7 @@ from app.domain import errors
 from app.domain.errors import AnvexError
 from app.domain.ingest import SESSION_CLOSE, SESSION_OPEN, Month
 from app.domain.password import failed_rules
+from app.middleware.errors import _HTTP_STATUS_CODES as error_status_codes
 from app.schemas.user import UserCreate
 from app.settings import REPO_ROOT, get_settings
 from scripts import smoke
@@ -538,12 +539,14 @@ def _forbidden(*_: object, **__: object) -> dict[str, object]:
 def _error_codes() -> set[str]:
     """Every `code` the domain can put in an error envelope, discovered rather than listed.
 
-    Two modules, and the second is the one that caught this out: `app/domain/errors.py` has
-    the seven general codes, and `app/domain/auth.py` adds `invalid_token`, `token_expired`
-    and `wrong_token_type` on its `TokenError` subclasses. A set built from only the first
-    would have "proved" that `wrong_token_type` does not exist.
+    Three sources, and the second is the one that caught this out: `app/domain/errors.py`
+    has the seven general codes, `app/domain/auth.py` adds `invalid_token`, `token_expired`
+    and `wrong_token_type` on its `TokenError` subclasses, and the middleware's own
+    status-to-code map covers what a bare `HTTPException` becomes (`service_unavailable`
+    from `/health/ready`, say). A set built from only the first would have "proved" that
+    `wrong_token_type` does not exist.
     """
-    found: set[str] = set()
+    found: set[str] = set(error_status_codes.values())
     for module in (errors, auth_errors):
         for value in vars(module).values():
             if isinstance(value, type) and issubclass(value, AnvexError):

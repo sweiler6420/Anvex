@@ -357,11 +357,27 @@ jobs:
       - name: Copy the example environment
         run: cp .env.example .env
 
+      # `pipefail` is load-bearing: without it the pipeline's status is `tee`'s, so a failed
+      # smoke run would be a green step.
       - name: Smoke
-        run: ./scripts/smoke.sh
+        shell: bash
+        run: |
+          set -o pipefail
+          ./scripts/smoke.sh 2>&1 | tee smoke.log
 
-      # Only on the way out, and only on a failure: the step's own message says *what* went
-      # wrong, and these say what the containers were doing while it did.
+      # **A run's log is only readable with a token; its annotations are not.** This
+      # repository is public and `gh` is not always authenticated, so without this step
+      # "the smoke job is red" is the whole of what anyone can learn from outside — and the
+      # entire design of `scripts/smoke` is that a failure names the step, what it expected
+      # and what it saw. Re-emitting the tail as workflow errors puts that diagnosis on the
+      # run summary and into the checks API, where it can be read with no credentials.
+      - name: Report which step failed
+        if: failure()
+        shell: bash
+        run: tail -n 25 smoke.log | sed 's/^/::error::/'
+
+      # And what the containers were doing while it happened, which the step's own message
+      # cannot know.
       - name: Container logs
         if: failure()
         run: docker compose --profile celery --profile frontend logs --tail 100

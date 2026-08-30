@@ -4,7 +4,7 @@ The checklist behind `scripts/smoke.ps1` / `scripts/smoke.sh` (ANV-41). Twenty s
 order, from `docker compose up` to loading `/research` in a DOM with nothing but a refresh
 token.
 
-**This is the only thing in the repository that proves the pieces fit together.** 3,879
+**This is the only thing in the repository that proves the pieces fit together.** 3,995
 backend tests, 922 frontend tests, a `validate`-clean Terraform tree and a green CI each
 prove one component with its neighbours replaced by fixtures. None of them would notice if
 the API container could not reach Postgres by service name, if the published port were
@@ -50,7 +50,7 @@ exit is useless at two in the morning, so there is deliberately no such thing he
 ```
 FAILED at step 6/20: api-health — Liveness and readiness
   expected: GET http://localhost:8000/health and /health/ready to answer 200
-  observed: /health 200, /health/ready 503 {"error":{"code":"service_unavailable",…
+  observed: /health 200, /health/ready 503 service_unavailable: The database is unavailable.
   hint:     a 503 from /health/ready is the API up but unable to reach Postgres by
             service name; a connection error is the published port (API_HOST_PORT)
 ```
@@ -70,7 +70,7 @@ the stack coming up, and every hint above points into it.
 | 6 | `api-health` | `/health` (liveness, no I/O) and `/health/ready` (the API reaching Postgres from **inside** the network) | A 503 is the compose wiring; a connection error is the published port |
 | 7 | `cors` | A preflight from `http://localhost:5173` is allowed | `API_CORS_ORIGINS` — a mistake here fails only in a browser, and nowhere in any test |
 | 8 | `register` | `POST /v1/users` creates an account; a second attempt is 409 `conflict` | A 422 naming `failed_rules` means ANV-43's password policy changed |
-| 9 | `login` | Form-encoded login returns a `TokenPair`; a wrong password is 401 `invalid_credentials` | A 422 is usually a caller sending JSON — this route takes an OAuth2 **form** body |
+| 9 | `login` | Form-encoded login returns a `TokenPair`; a wrong password is 401 `unauthorized` | A 422 is usually a caller sending JSON — this route takes an OAuth2 **form** body |
 | 10 | `refresh` | The exchange answers a working `TokenPair`, an **access** token presented where a refresh belongs is 401 `wrong_token_type`, and `/v1/users/me` accepts the rotated bearer | Note the two things deliberately **not** asserted — see below |
 | 11 | `reference-data` | The rows step 5 wrote read back over HTTP — with a bearer, because **every** `/v1` route is behind the guard, reference data included | A 401 is the token; a 500 is the seed and the API on different databases |
 | 12 | `security` | A security exists to ingest and to read, and is searchable through `GET /v1/stocks` behind the bearer | There is no `POST /v1/stocks`; the row is written through the repository, which is what a future admin route would use |
