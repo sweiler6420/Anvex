@@ -33,6 +33,7 @@ is the handoff document, and it is kept short on purpose.
 | Docker daemon frequently stopped | check before depending on it |
 | **Outbound DNS to CDN-fronted hosts fails intermittently** — `production.cloudfront.docker.com` (ANV-38) and `registry.terraform.io` (ANV-40) both return `no such host` to a Go binary while `Resolve-DnsName` and `Invoke-WebRequest` answer fine from the same shell | it is transient, not a proxy or a block. **Retry** — `terraform init` failed then succeeded on the very next attempt, twice. `docker pull` has never yet succeeded through it |
 | **No Terraform installed, and none is needed** | `backend/infra/` is not a repository dependency (ANV-40). To verify it, unzip a release from `releases.hashicorp.com` into a scratch dir and run it by full path — do not add it to PATH and do not install it |
+| **`terraform init` leaves a 685 MB `.terraform/` in the repo, and the repo is inside OneDrive** | gitignored, so git never sees it — but OneDrive will happily sync every megabyte. **`Remove-Item -Recurse -Force backend/infra/.terraform` when you are done validating** |
 | Bash tool sandbox has a minimal PATH | use the PowerShell tool for uv / docker / git |
 | **Windows PowerShell 5.1 `Get-Content` reads a BOM-less file as ANSI** | appending to these UTF-8 logs with `Get-Content \| Add-Content` mangles every em dash. Use `[System.IO.File]::ReadAllText($path, (New-Object System.Text.UTF8Encoding($false)))` |
 

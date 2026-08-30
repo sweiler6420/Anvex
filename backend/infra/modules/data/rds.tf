@@ -31,7 +31,11 @@ resource "aws_db_subnet_group" "this" {
 # the default group cannot be modified, so the first parameter anyone ever needs would
 # otherwise require replacing the instance. Creating it now costs nothing.
 resource "aws_db_parameter_group" "this" {
-  name        = var.name
+  # `name_prefix`, not `name`, and the two lines below are why: `family` forces replacement
+  # (it is the engine major version), and `create_before_destroy` means the replacement is
+  # built while the original still exists. With a fixed name that is a name collision and
+  # the apply fails halfway through a major upgrade — the worst possible moment.
+  name_prefix = "${var.name}-"
   family      = var.postgres_parameter_group_family
   description = "Postgres parameters for ${var.name}."
 

@@ -2185,3 +2185,10 @@ The test suite could not see it, because a hardcoded literal is not drift betwee
 one file disagreeing with its own prose. `fe45313` wires `var.alb_deletion_protection` and both
 tfvars files set it. **The lesson generalises to the whole directory: every test here compares two
 artefacts, so a value that appears in only one place is checked by nothing but reading it.**
+
+**A second review defect, of the same kind and invisible to both the tests and `terraform validate`.**
+The RDS parameter group had a fixed `name` *and* `create_before_destroy`. `family` forces replacement
+— it is the engine major version — so the first major upgrade would have built the replacement while
+the original still existed, under the same name, and failed the apply halfway through the riskiest
+operation the estate has. `name_prefix` fixes it. Nothing that stops at `validate` can see a name
+collision that only exists during a replacement; only reading the resource can.
