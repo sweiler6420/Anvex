@@ -31,7 +31,10 @@ is the handoff document, and it is kept short on purpose.
 | No `node` / `npm` installed | all frontend tooling runs **inside Docker** |
 | `gh` CLI installed 2026-08-28, on the *user* PATH, and **not authenticated** | older shells need the full path; `gh run watch` is unavailable — the repo is public, so poll `api.github.com/repos/sweiler6420/Anvex/actions/runs` instead (logs are 403, step conclusions are not) |
 | Docker daemon frequently stopped | check before depending on it |
+| **Outbound DNS to CDN-fronted hosts fails intermittently** — `production.cloudfront.docker.com` (ANV-38) and `registry.terraform.io` (ANV-40) both return `no such host` to a Go binary while `Resolve-DnsName` and `Invoke-WebRequest` answer fine from the same shell | it is transient, not a proxy or a block. **Retry** — `terraform init` failed then succeeded on the very next attempt, twice. `docker pull` has never yet succeeded through it |
+| **No Terraform installed, and none is needed** | `backend/infra/` is not a repository dependency (ANV-40). To verify it, unzip a release from `releases.hashicorp.com` into a scratch dir and run it by full path — do not add it to PATH and do not install it |
 | Bash tool sandbox has a minimal PATH | use the PowerShell tool for uv / docker / git |
+| **Windows PowerShell 5.1 `Get-Content` reads a BOM-less file as ANSI** | appending to these UTF-8 logs with `Get-Content \| Add-Content` mangles every em dash. Use `[System.IO.File]::ReadAllText($path, (New-Object System.Text.UTF8Encoding($false)))` |
 
 ## Legacy repos — read-only
 
@@ -96,12 +99,22 @@ modified. What each contributes to Anvex:
 | ANV-43 | Backend password strength policy | **Done** — *found by ANV-30; E3 gap closed* |
 | ANV-37 | Developer scripts | **Done** |
 | ANV-38 | CI pipeline | **Done** — *green on the first push* |
+| ANV-40 | AWS infrastructure skeleton | **Done** — *validated, never applied, $0.00* |
 | ANV-39 | Documentation and ADRs | Next |
-| ANV-40 … ANV-41 | see `backlog.md` | Not started |
+| ANV-41 | E2E smoke | Not started — *the last one* |
 
-**4,224 tests total** — **3,302 backend** (2,919 with Docker stopped, DB/S3/broker tiers skipping)
+**4,469 tests total** — **3,547 backend** (3,164 with Docker stopped, DB/S3/broker tiers skipping)
 and **922 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check`
 and `eslint` all clean. Container tiers genuinely execute: **276 DB**, **29 S3**, **9 broker**.
+
+**There is Terraform in `backend/infra/` and it has never been applied.** No AWS account has been
+touched, no credential exists, and the running cost is $0.00 (ANV-40). Local development depends on
+none of it — a test asserts nothing under `scripts/`, `docker-compose.yml` or `.env.example` so much
+as mentions Terraform, and that no script or workflow runs `terraform apply`. Verifying it needs no
+account: `cd backend/infra && terraform init -backend=false && terraform validate`.
+[`docs/aws-deployment.md`](./aws-deployment.md) is the deploy path and the monthly cost — **≈ $110
+at the floor, ≈ $161 for a usable `dev`**, of which the ALB and the NAT gateway are ~$55 before a
+single container runs.
 
 **Run everything through `scripts/`** (ANV-37): `up`, `down`, `logs`, `migrate`, `makemigration`,
 `seed`, `test`, `lint`, `fmt`, `reset-db`, each a `.ps1`/`.sh` pair taking the same command line.
@@ -391,11 +404,7 @@ is 8 to the client and 4 to the server.
 - **Known follow-ups worth tickets:** desktop layout persistence (needs an API endpoint — there is
   none), and a holdings model + quote source before `/portfolio` can be real.
 
-**For the remaining ops tickets (ANV-39, 40, 41) — from ANV-37:**
-- **ANV-40 (AWS skeleton):** `migrate`, `seed` and `reset-db` reach Postgres by translating `.env`'s
-  `POSTGRES_HOST=db` to `localhost` plus the published port, in `_common` only. Anything that runs
-  those against a real RDS just sets `POSTGRES_HOST` in the environment — the translation stands
-  aside when it is set. Do not add a second DSN.
+**For the remaining ops tickets (ANV-39, 41) — from ANV-37:**
 - **ANV-41 (smoke):** `scripts/smoke` should be a pair like everything else and will need a README
   row. The boot sequence it documents already exists and is verified: `up core` → `migrate` →
   `seed`, then `up frontend`. `reset-db --yes` is the clean-slate version of the same thing and
@@ -404,7 +413,7 @@ is 8 to the client and 4 to the server.
   linter and prettier is not installed. Adding prettier is a repo-wide diff and wants its own
   ticket; until then `lint frontend` is the whole frontend story, and the `fmt` header says so.
 
-**For the remaining ops tickets (ANV-39, 40, 41) — from ANV-38:**
+**For the remaining ops tickets (ANV-39, 41) — from ANV-38:**
 - **CI exists and is green, so every later ticket has a verifier.**
   [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs `Backend` and `Frontend` on every
   push to `main` and every pull request; `backend/tests/unit/test_ci_workflow.py` (64 tests) is what
@@ -414,19 +423,14 @@ is 8 to the client and 4 to the server.
   `test_ci_workflow.py` discovers those paths by scanning the test sources for `REPO_ROOT / …` and
   fails if one is not covered, so it will tell you — but it fails *after* you write the test, not
   before. Currently covered: `scripts/**`, `SignUpPage.jsx`, `frontend/package.json`, `README.md`,
-  `CLAUDE.md`, `.env.example`, `docker-compose.yml`.
+  `CLAUDE.md`, `.env.example`, `docker-compose.yml`, and — since ANV-40 — `.gitignore` and
+  `docs/aws-deployment.md`, the only `docs/` file in the filter.
 - **ANV-39 (docs):** the workflow's own header comment and `README.md`'s `## Continuous integration`
   section are the current CI documentation, and a test asserts the README section names both jobs and
   explains why the backend filter reaches into the frontend. **Two ADR-shaped decisions are already
   argued in prose and want a home:** CI calls `scripts/` for the backend but `package.json` for the
   frontend (the wrappers only add a container the runner does not need), and a path filter is
   treated as coverage-deleting — which is why the backend filter is wider than `backend/**`.
-- **ANV-40 (AWS skeleton):** the workflow is **read-only** — `permissions: contents: read` plus
-  `pull-requests: read`, no `id-token`, no secrets, no deploy step. Anything that pushes an image or
-  assumes a role needs `permissions: id-token: write` on *that job only* and should be a separate
-  workflow file rather than a third job here, so a deploy credential is never in scope for a test
-  run. `POSTGRES_HOST` set in the environment is still the one supported way to point host-side
-  tooling at RDS (from ANV-37) — CI does the same thing with `POSTGRES_TEST_HOST`.
 - **ANV-41 (smoke):** a smoke job is a **third job in this workflow**, not a fourth top-level file,
   and it needs the boot sequence a service container cannot express (`up core` → `migrate` → `seed`)
   — so it wants `docker compose` on the runner rather than `services:`. If it adds `scripts/smoke`
@@ -444,3 +448,50 @@ is 8 to the client and 4 to the server.
 - **`actionlint` validates the workflow locally with no Docker**: the Windows binary from the
   `rhysd/actionlint` GitHub release runs standalone. `docker pull` failed on this machine with a DNS
   error for `production.cloudfront.docker.com`, which may recur.
+
+
+**For the last two tickets (ANV-39, 41) — from ANV-40:**
+- **`backend/infra/` exists, is `validate`-clean, and has never been applied.** No AWS account has
+  been touched and the running cost is $0.00. **Nothing in either remaining ticket should change
+  that**: no `scripts/` pair, no CI job, no `terraform apply` / `destroy` / `plan` / `import`
+  anywhere — a plan reaches a real account, so a workflow that can run one holds a credential that
+  could do more. `test_infra_terraform.py` fails on any of those appearing in a script or workflow.
+- **The verification loop needs no AWS account** and takes about a minute:
+  `cd backend/infra && terraform init -backend=false && terraform validate && terraform fmt -check
+  -recursive`. **Terraform is not installed on this machine and must not be installed** — unzip a
+  release from `releases.hashicorp.com` into a scratch dir and run it by full path. The provider
+  registry's DNS is flaky here in the same way Docker's is; **retry, it works on the second try**.
+- **ANV-39 (docs):** [`docs/aws-deployment.md`](./aws-deployment.md) is written and is the deploy
+  path plus the cost estimate; it is *not* an ADR and does not try to be. **Four ADR-shaped
+  decisions are already argued in prose there and in `backend/infra/README.md`, and want a home:**
+  (1) secrets are created empty and filled by hand, because a `secret_version` writes plaintext into
+  Terraform state and `sensitive = true` marks an output rather than state — the accepted cost is
+  that a task will not start until a human has filled every box; (2) `.tfvars` are **committed**,
+  against the usual advice, because these hold no secrets and a variable layout git ignores is a
+  variable layout nobody else has; (3) `local` is a variable set and **not a deployment**, existing
+  so the cost table has an honest floor and the compose stack and the Terraform are diffable;
+  (4) one ECR repository for three services, because compose runs one image. Also worth a line in
+  any docs index: `docs/aws-deployment.md` is the **first `docs/` file in the CI backend path
+  filter**, so editing it runs the backend job — that is a test doing its job, not a misconfiguration.
+- **ANV-39 (docs):** two **application** gaps were found writing the task definitions and are
+  documented rather than fixed, because ANV-40 changed no application code. They should appear in
+  whatever "known limitations" the docs ticket produces: **`S3Client` cannot talk to real S3** (its
+  MinIO default cannot be unset by omission and `""` is not `None` to botocore; and it deliberately
+  refuses a blank key pair, which is why the Terraform creates an IAM *user* rather than using the
+  task role) — tracked as `TODO(ANV-s3-aws)`, which a test pins to the exact assignment it annotates;
+  and **nothing uses TLS to Postgres or Redis**, because `Settings` builds a plain
+  `postgresql+asyncpg://` and a plain `redis://`, so `rds.force_ssl` or `transit_encryption_enabled`
+  alone would refuse every connection. Both are small application changes and each wants its own
+  ticket.
+- **ANV-41 (smoke):** nothing in the smoke path goes near AWS. `POSTGRES_HOST` in the environment is
+  still the one supported way to point host-side tooling somewhere else (ANV-37), and that is the
+  *only* seam the infrastructure adds — there is no second DSN and no AWS-specific code path in
+  `app/`. If a smoke script ever grows an "against a deployed environment" mode, it must take a base
+  URL as an argument rather than reading anything out of `backend/infra/`, or it breaks the
+  "local development never depends on this" test.
+- **If you add a `Settings` field, you must edit `backend/infra/modules/compute/locals.tf`.** The
+  union of `container_environment` and `container_secrets` there is asserted **equal** to
+  `Settings.model_fields` upper-cased, in both directions. The suite will tell you, but only after
+  you have added the field.
+- **`python-hcl2` is now a backend dev dependency**, for the one test module that parses HCL — the
+  same argument that brought in `pyyaml` for `test_ci_workflow.py`.

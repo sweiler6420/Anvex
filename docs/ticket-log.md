@@ -2053,3 +2053,127 @@ reachability probe with `: <<'PY'` — a heredoc fed to the null command — lef
 probe in the file and ran none of it, and hard-coding `count=0` left the step's own echo line
 saying `jsxDEV`. Both tests now assert the *mechanism* (`uv run python`, `grep -c 'jsxDEV'`) rather
 than the vocabulary. The workflow was restored from an in-memory copy after every mutation.
+
+---
+
+### ANV-40 — Done
+Commit `024218f` on `main`, 45 files, 245 new tests (3,302 → **3,547** backend).
+
+**Nothing is provisioned, and that is checkable rather than promised.** No AWS account was
+touched, no credential was used, created or looked for, and the running cost is $0.00. The
+verification loop needs no account at all — `terraform init -backend=false`, `terraform validate`
+(**Success! The configuration is valid.**), `terraform fmt -check -recursive` (exit 0) — which is
+only possible because `versions.tf` declares `backend "s3" {}` as a *partial* configuration, so no
+real state bucket is named in a public repository. Locally: 3,547 backend collected / 34 skipped,
+922 frontend, `ruff check` + `ruff format --check` clean.
+
+**Terraform was obtained without installing anything.** `docker pull hashicorp/terraform:1.9` hit
+the same `production.cloudfront.docker.com: no such host` DNS failure ANV-38 recorded, twice. The
+release zip (`terraform_1.9.8_windows_amd64.zip`) into the scratchpad worked first time and was
+never added to PATH. The repository does not depend on that choice: **Terraform is not a repository
+dependency** — nothing installs it, no script calls it, CI does not run it, and `versions.tf` asks
+only for `>= 1.9.0, < 2.0.0`. The *provider* is pinned (`hashicorp/aws ~> 5.70`, resolved to
+5.100.0) and `.terraform.lock.hcl` is committed with three platforms' checksums. Note the
+registry's DNS is flaky on this machine in exactly the way Docker's is: `registry.terraform.io`
+resolves fine from PowerShell and returns `no such host` to a Go binary at random. **Retry; it
+works on the second attempt.**
+
+**The value of the ticket is that the estate is read off `docker-compose.yml`, not off a tutorial.**
+Everything below is a drift test, so changing one side fails the backend suite:
+
+- **One ECR repository, not three.** Compose gives `api`, `worker` and `beat` the same
+  `anvex/api:dev` and differs only in `command`. Three repositories would be three chances for the
+  worker to run a different commit from the API that enqueued its work.
+- **The worker and beat command lines are compose's, character for character** — including
+  `--pool prefork` and `--schedule /tmp/anvex-celerybeat-schedule`. The `--concurrency` value is
+  asserted equal to `local.tfvars`'s `worker_concurrency`.
+- **`beat` is pinned to `desired_count = 1` as a literal, and stops its old task before starting
+  the new one** (`deployment_minimum_healthy_percent = 0`). Compose's own comment is the argument:
+  two schedulers publish every tick twice. A rolling deployment is the second way to get two, and
+  the one nobody thinks of.
+- **The target group polls `/health/ready` and the container polls `/health`** — `app/api/health.py`
+  says why, and swapping them turns a database blip into a restart loop.
+- **The S3 lifecycle filters on `app.domain.storage.EXPORTS_PREFIX` and expires at
+  `EXPORT_RETENTION`.** That module's docstring already said the prefix "appears in every lifecycle
+  policy"; this is the policy, and now the two cannot part company.
+- **Engine versions track the compose image tags** (`postgres:16-alpine` → `16.4` → family
+  `postgres16`; `redis:7-alpine` → `7.1` → `default.redis7`), and the ALB forwards to the port the
+  Dockerfile `EXPOSE`s.
+
+**The highest-value test is the environment contract**, in the spirit of ANV-43's password drift
+test. `modules/compute/locals.tf` holds `container_environment` and `container_secrets`, and their
+union is asserted **equal in both directions** to `Settings.model_fields` upper-cased — 20 plain
+values and 6 secrets against 26 fields. A field added to `Settings` with no home there is a
+deployment silently running on that field's default, which for `postgres_host` is `db`: a compose
+service name that resolves to nothing in AWS.
+
+**No secret value is anywhere in the configuration, and three resource types are banned to keep it
+that way.** `aws_secretsmanager_secret_version`, `aws_iam_access_key` and `aws_ssm_parameter` all
+write plaintext into the **state file**, where `sensitive = true` does not reach — it marks an
+output. So `modules/secrets` creates named, empty boxes, `modules/storage` creates an IAM user and
+no key, and RDS generates its own master password (`manage_master_user_password`) with Terraform
+learning only the ARN. The consequence is stated rather than hidden: **an ECS task will not start
+until a human has put a value in every secret.** That is the correct failure; the alternative is an
+API signing tokens with a key somebody committed.
+
+**Two application blockers were found while writing the task definitions, and neither was fixed —
+ANV-40 changed no application code.** Both are argued in `docs/aws-deployment.md` §4:
+
+- **`S3Client` cannot talk to real S3.** Two individually-correct properties combine badly.
+  `Settings.s3_endpoint_url` defaults to `http://minio:9000`, so it cannot be unset by omitting the
+  variable, and `S3Client` passes whatever it holds to `aioboto3` where `""` is not `None`. And
+  `_require_configuration` refuses a blank key pair on purpose — its docstring explains that
+  botocore would otherwise fall back to the ambient identity and quietly write to a real bucket —
+  which means the app **must** be handed static credentials, which is why `modules/storage` creates
+  an IAM *user* rather than granting the Fargate task role. The task definitions set
+  `S3_ENDPOINT_URL = ""` behind a `TODO(ANV-s3-aws)` that a test pins to that exact assignment. The
+  fix is a small application change, after which the IAM user, its key and the `s3-credentials`
+  secret are all *deleted*; the task role's S3 statement is already written out in a comment.
+- **Nothing uses TLS to Postgres or Redis.** `rds.force_ssl` is unset and
+  `transit_encryption_enabled` is false, both because `Settings` builds a plain
+  `postgresql+asyncpg://` and a plain `redis://`. Turning either on alone refuses every connection.
+
+**The cost, which is the number that decides whether this is ever deployed:** **≈ $110/month** for
+the `local` shape (the compose stack in AWS, one of everything, no backups) and **≈ $161/month** for
+a usable `dev`. The headline is that **the ALB and the NAT gateway are ~$55/month before a single
+container runs** — half the floor, fixed, and untunable. There is no $20 version. The five levers
+worth having are itemised with what each costs you; all together take `dev` to ~$77, and only two
+of them (run it 12×5 instead of 24×7, and ARM64) have no real trade attached.
+
+**Judgement calls.** `local` is **not a deployment** and the tfvars file says so twice — it is the
+sizing that mirrors compose, so the cost table has an honest floor and the two topologies are
+diffable. `.tfvars` are **committed** against the usual advice, with an explicit
+`!backend/infra/envs/*.tfvars` in `.gitignore` and a test asserting both the exception and the
+absence of anything secret-shaped; a variable layout git ignores is a variable layout nobody else
+has. `single_nat_gateway = true` in *both* environments — AZ-independent egress is $33.75/month for
+an environment whose point is that it can be down for an hour. `X86_64` in both, even though ARM64
+is ~20% cheaper, because an x86 image pushed to an ARM64 task definition fails at task start rather
+than at deploy. `python-hcl2` joins the backend dev group for the one module that parses HCL, for
+the reason ANV-38 took `pyyaml`: a regex matcher that mis-models the language reports the
+configuration is correct when it is not. And `docs/aws-deployment.md` is the **first `docs/` file in
+the CI backend path filter**, because a test asserts the instance classes it prices are the ones
+`dev.tfvars` configures.
+
+**33 mutations, 33 behaving as intended after three rounds.** Killed: dropping `JWT_SECRET_KEY`
+from the contract, inventing an env var `Settings` never reads, pointing `S3_ENDPOINT_URL` back at
+MinIO, hardcoding the region in the provider, pasting a real-shaped account id into an ARN, adding
+an `aws_secretsmanager_secret_version` or an `aws_iam_access_key`, an unused variable, an undeclared
+one, a required variable missing from `dev.tfvars`, drifting the worker concurrency or beat's
+schedule path from compose, scaling beat to two, letting beat roll, swapping the two health
+endpoints, typo-ing the export prefix, drifting the export expiry from `EXPORT_RETENTION`, a second
+ECR repository, a public IP on the worker tasks, a Postgres major-version drift, widening the
+execution role to `Resource: "*"`, a literal RDS password, deleting the `.gitignore` exception,
+`terraform apply` in `scripts/up.sh`, `id-token: write` in `ci.yml`, a renamed module output, a
+dropped module input, an undescribed variable, and sizing `dev` for a machine the cost table never
+priced. **Two mutants are meant to survive and do**: an account id in a *comment* (the scan reads
+the parsed tree, so prose that quotes a rule is not a violation of it), and stripping the TODO from
+the module header while the value keeps it.
+
+**The one real survivor took two goes to kill, and it is the same lesson ANV-38 wrote down.**
+"`TODO(ANV-s3-aws)` is somewhere in the file" was worthless — the module header explains the
+divergence at length, so deleting the marker beside the value left the string in the file. The
+obvious fix, "a line containing both `S3_ENDPOINT_URL` and the marker", was *also* worthless, for a
+subtler version of the same reason: the header's first line names the variable while raising the
+TODO, and satisfied both halves on its own. Only a pattern matching an actual
+`S3_ENDPOINT_URL = "" #  TODO…` **assignment** is about the thing the marker annotates. Assert the
+mechanism, not the vocabulary.
