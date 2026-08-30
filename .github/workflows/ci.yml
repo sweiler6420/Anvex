@@ -79,6 +79,9 @@ jobs:
   #       API surface is compared against the live OpenAPI document in both directions, the
   #       seven layers of the walkthrough against the real `app/` directories, and every
   #       `TODO(ANV-…)` the docs promise against the file that carries it (ANV-39)
+  #   docs/smoke.md                                         test_smoke.py — the smoke
+  #       checklist's step table is compared against `backend/scripts/smoke.py`'s own step
+  #       list, ids and order, in both directions (ANV-41)
   #
   # Those are the only `docs/` entries and each is here because a test reads it;
   # `build-log.md` and `ticket-log.md` are in neither filter and still run nothing, which
@@ -113,6 +116,7 @@ jobs:
               - 'docs/aws-deployment.md'
               - 'docs/architecture.md'
               - 'docs/adr/**'
+              - 'docs/smoke.md'
               - '.github/workflows/ci.yml'
             frontend:
               - 'frontend/**'
@@ -301,3 +305,63 @@ jobs:
             echo "::error::dist/ is a development bundle - something set NODE_ENV"
             exit 1
           fi
+
+  # --------------------------------------------------------------------------- smoke job
+  #
+  # The only job here that proves the claim ANV-41 was actually about: **the stack boots on
+  # a machine that has never seen it.** The other two prove components — a suite whose
+  # neighbours are fixtures, a bundle nobody loads — and both are green on a laptop where
+  # `docker compose` has not run for a week.
+  #
+  # Three things make this different from the backend job, and each is deliberate:
+  #
+  #   * **`docker compose`, not `services:`.** A service container is started before the
+  #     job's first step, which cannot express `up core` → `migrate` → `seed`; the ordering
+  #     *is* the thing under test. Compose is on the runner image, so this costs nothing but
+  #     the two image builds.
+  #   * **Nothing is cached.** `anvex/api:dev` and `anvex/web:dev` are built here from
+  #     scratch every run. That is the expensive half and it is also the point — locally,
+  #     `smoke --clean` destroys the volumes but not the images, so a clean-machine boot is
+  #     the one claim a developer's box can never make.
+  #   * **No `--live-vendor`, ever.** The flag would spend the key owner's AlphaVantage
+  #     quota on every push, and there is no key on a runner to spend anyway. The default
+  #     stubs the vendor at the transport seam; `test_smoke.py` asserts that default and
+  #     `test_ci_workflow.py` asserts this job never passes the flag.
+  #
+  # `docs/smoke.md` is the checklist, and a failing step names itself in the log.
+  smoke:
+    name: Smoke
+    needs: changes
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # Whole repository again: this runs `scripts/smoke.sh`, which drives compose from the
+      # root and the backend entry point from `backend/`.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Sync dependencies
+        working-directory: backend
+        run: uv sync --locked
+
+      # The literal first two lines of the README's quick start, and the literal definition
+      # of done for ANV-41: nothing here but a clone and the example environment file. No
+      # API key is added, which is why the vendor leg reports itself as stubbed.
+      - name: Copy the example environment
+        run: cp .env.example .env
+
+      - name: Smoke
+        run: ./scripts/smoke.sh
+
+      # Only on the way out, and only on a failure: the step's own message says *what* went
+      # wrong, and these say what the containers were doing while it did.
+      - name: Container logs
+        if: failure()
+        run: docker compose --profile celery --profile frontend logs --tail 100

@@ -58,6 +58,7 @@ confirmation without `--yes`.
 | `lint [backend\|frontend\|all]` | `ruff check` + `ruff format --check`, and eslint |
 | `fmt [--check]` | `ruff format` + `ruff check --fix`. **Backend only** — the frontend has no formatter |
 | `reset-db [--yes]` | delete the dev database volume, recreate, migrate, seed |
+| `smoke [--clean --yes] [--live-vendor] [--skip-frontend]` | boot the whole stack and prove it end to end — twenty steps, [`../../docs/smoke.md`](../../docs/smoke.md) |
 
 `fmt` stopping at the backend is deliberate and the script header says so: eslint is a
 linter, prettier is not installed, and adding it is a repository-wide diff that wants its own
@@ -207,6 +208,17 @@ so doing that turns a database blip into an API restart loop.
 | Test suite green but a whole tier silently absent | tiers skip when their container is down — that is by design locally | `-rs` shows the skip reasons; CI asserts each tier is reachable before running |
 | `docker pull` fails with `no such host` for `production.cloudfront.docker.com` | intermittent DNS to CDN-fronted hosts on this machine — `Resolve-DnsName` answers fine from the same shell | transient. Retry |
 | Em dashes mangled after appending to a doc from PowerShell | Windows PowerShell 5.1 `Get-Content` reads a BOM-less UTF-8 file as ANSI | read with `[System.IO.File]::ReadAllText($path, (New-Object System.Text.UTF8Encoding($false)))` |
+| `Event loop is closed` from asyncpg, on the *second* thing a host script does | `app/db/engine.py` keeps a module-level engine, so pooled connections opened under one `asyncio.run` outlive the loop they were bound to | dispose **inside** the loop: `try: … finally: await dispose_engine()`. `app/jobs/base.py` does this for a Celery task; `backend/scripts/smoke.py`'s `in_a_loop` does it for a script (ANV-41) |
+| Registration is a 422 naming `email`, for an address that looks fine | `email-validator` refuses **special-use** names — `.invalid`, `.localhost`, `.test`, `.local`, `.arpa`, `.onion` | use `example.com`, which is IANA-reserved for documentation and is *not* on that list |
+| A `docker compose exec … sh -c 'cat > /tmp/x'` writes an empty file | nothing was piped to it — `-T` makes stdin a pipe, it does not fill it | pass the payload as the subprocess's `input` |
+| A "no HTTP calls" claim, and yet `client.request.completed` in the log | the smoke's stubbed ingest injects an `httpx.MockTransport` at `BaseHTTPClient`'s `transport=` seam, so the client logs a completed request that never left the process | expected. The line shows `apikey=REDACTED`, which is the redaction working |
+| The suite's DB/S3/broker tiers start skipping right after a smoke run | `smoke --clean` is `docker compose down --volumes` for the **whole project**, and that takes `db-test` with it | `up db-test` before the next `test backend`, or the tiers skip politely and the run looks green with 276 fewer tests in it |
+| `scripts/smoke.sh` passes locally and would not on a clean machine | the images are cached here. `--clean` destroys the **volumes**, not `anvex/api:dev` | only a runner that has never built them proves that half; locally, `--clean --yes` is as far as it goes |
+
+**The two whole-stack failures ANV-41 actually hit are not in this table**, because neither
+stops the stack coming up — they are contract failures a running system reports happily.
+Both are in [`../../docs/architecture.md`](../../docs/architecture.md) §6: a spent refresh
+token is never revoked, and a rotation inside the same second returns the identical token.
 
 ## Things that are absent on purpose
 

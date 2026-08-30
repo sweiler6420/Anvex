@@ -2023,9 +2023,59 @@ what any future documentation edit has to satisfy.
   rewording a heading or a paragraph of an ADR is a *deliberate survivor*, because a document
   is allowed to be rewritten and is not allowed to become false.
 - **A documentation drift test that reads outside `backend/` extends the CI backend path
-  filter**, per §6's rule above. ANV-39 added `docs/architecture.md` and `docs/adr/**`; they
-  are the second and third `docs/` entries, and `docs/build-log.md` / `docs/ticket-log.md` are
-  still deliberately in neither filter.
+  filter**, per §6's rule above. ANV-39 added `docs/architecture.md` and `docs/adr/**`;
+  ANV-41 added `docs/smoke.md`. `docs/build-log.md` and `docs/ticket-log.md` are still
+  deliberately in neither filter, so logging a ticket runs nothing.
+
+### End-to-end smoke (ANV-41)
+
+**One program runs the real stack, and nothing else in this repository does.** Every suite
+above replaces its neighbours with a fixture; `backend/scripts/smoke.py` replaces nothing —
+real containers, real migrations, real Postgres, real broker, real built bundle, in the
+order a developer meets them. The rules it establishes:
+
+- **A whole-stack check is a `backend/scripts/` entry point with a `scripts/` wrapper**, like
+  `seed`. Both wrapper halves are a header and three lines; the behaviour is one Python
+  module the backend suite can import and test. A wrapper that grows a step of its own has
+  immediately created a step only one operating system runs.
+- **Every failure names the step, what was expected, and what was seen** — plus a hint
+  pointing at the thing that is usually really wrong. A smoke check whose failure mode is a
+  non-zero exit is nearly useless at 2am. `SmokeFailure(expected=…, observed=…, hint=…)` is
+  the only way to fail, and a test parses the module to prove every raise site supplies the
+  first two.
+- **A third-party call is opt-in, and the default says so out loud.** AlphaVantage's free
+  tier is ~25 calls a day and the key is the owner's, so the vendor is stubbed at
+  `BaseHTTPClient`'s `transport=` seam unless `--live-vendor` is passed; a *configured* key
+  with no flag skips the step that would spend one rather than quietly spending it. **A
+  stubbed leg reported as a live one is worse than no smoke check at all**, so the mode is
+  printed in the header and repeated in the summary. The stub asserts the request it answers
+  — path, function, symbol, interval, month and key — so it proves the client builds the call
+  the live path would send, not merely that the parser works.
+- **A failure report is output, and output must not contain credentials.** `envelope()`
+  reports an unexpected success body as *its keys*, never its values, because on this API
+  that body is very often a `TokenPair`. A test walks the AST for everything handed to
+  `out`/`note` or returned from a `step_*` function and refuses the token and password names.
+- **A host-side script that opens a database session per step must dispose the engine inside
+  its own loop.** `app/db/engine.py` keeps a module-level engine, so connections opened under
+  one `asyncio.run` outlive the loop they were bound to and the next one inherits corpses —
+  the same rule `app/jobs/base.py` follows for a Celery task, and the same fix.
+- **The checklist and the step list are compared in both directions.** `docs/smoke.md`'s
+  table is what a reader trusts when deciding whether a green run means anything, so a step
+  in one and not the other fails the backend suite — as does a flag documented but not
+  accepted, or accepted but not documented.
+- **`docs/smoke.md` states what the run does *not* prove**, item by item: no AWS, no S3, no
+  mail, no `/portfolio`, no browser, and no token revocation. A green whole-stack run is the
+  easiest artefact in a repository to over-read.
+- **`backend/scripts/*.py` is scanned by the "local development never depends on the
+  infrastructure" test**, so a smoke driver may not name the infrastructure tooling even in a
+  docstring. What that test reads is compose, `.env.example`, `scripts/*.{ps1,sh}` and
+  `backend/scripts/*.py`.
+- **A smoke job is the third job in `ci.yml`**, gated on *either* stack changing, using
+  `docker compose` rather than `services:` — a service container starts before the first step
+  and cannot express `up` → `migrate` → `seed`, and the ordering is the thing under test. It
+  never passes `--live-vendor`, and a test asserts that. It is also the only job that proves
+  a boot on a machine that has never seen the repository: locally `--clean` destroys the
+  volumes, never the images.
 
 ---
 

@@ -45,8 +45,10 @@ from app.settings import REPO_ROOT
 
 WORKFLOW_PATH: Final[Path] = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
-#: The jobs `ci.yml` declares. `changes` computes the path filters the other two consume.
-EXPECTED_JOBS: Final[tuple[str, ...]] = ("changes", "backend", "frontend")
+#: The jobs `ci.yml` declares. `changes` computes the path filters the others consume.
+#: `smoke` (ANV-41) is the only one that boots the stack, and the only one gated on *either*
+#: stack having changed — it proves the two together, so a change to either invalidates it.
+EXPECTED_JOBS: Final[tuple[str, ...]] = ("changes", "backend", "frontend", "smoke")
 
 #: The two stacks that get their own filter and their own job.
 STACKS: Final[tuple[str, ...]] = ("backend", "frontend")
@@ -393,6 +395,39 @@ class TestNothingIsReSpelled:
         called = {name for command in run_steps("frontend") for name in NPM_RUN.findall(command)}
         assert called, "the frontend job runs no npm scripts"
         assert called <= defined, f"ci.yml runs undefined npm scripts: {sorted(called - defined)}"
+
+    def test_the_smoke_job_goes_through_the_script(self) -> None:
+        """ANV-41's job is `scripts/smoke.sh` and a `.env`, and nothing else.
+
+        A second spelling of the boot sequence in YAML is exactly what ANV-37 deleted, and
+        it would be the *only* copy nobody runs on a developer's machine.
+        """
+        commands = " ".join(run_steps("smoke"))
+        assert "./scripts/smoke.sh" in commands
+        assert "cp .env.example .env" in commands
+
+    def test_the_smoke_job_never_spends_the_vendor_quota(self) -> None:
+        """`--live-vendor` on every push would spend somebody's 25 calls a day.
+
+        There is no key on a runner to spend, so the flag could only ever fail there — but
+        the reason it is absent is the quota, and an assertion is what keeps it absent when
+        a key does eventually exist.
+        """
+        for command in run_steps("smoke"):
+            assert "--live-vendor" not in command, f"the smoke job asks for a live call: {command}"
+
+    def test_the_smoke_job_is_gated_on_either_stack(self) -> None:
+        """It proves the two together, so a change to *either* invalidates the last run."""
+        gate = str(jobs()["smoke"].get("if"))
+        for stack in STACKS:
+            assert f"needs.changes.outputs.{stack} == 'true'" in gate
+        assert "||" in gate
+
+    def test_the_smoke_job_captures_the_containers_on_a_failure(self) -> None:
+        """The step says *what* failed; only the logs say what the containers were doing."""
+        failure_steps = [step for step in steps("smoke") if step.get("if") == "failure()"]
+        assert failure_steps, "a smoke failure leaves no way to see what the stack was doing"
+        assert any("compose" in str(step.get("run")) for step in failure_steps)
 
     def test_the_frontend_job_covers_the_four_things_the_ticket_asks_for(self) -> None:
         commands = " ".join(run_steps("frontend"))

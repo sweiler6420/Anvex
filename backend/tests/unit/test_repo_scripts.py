@@ -60,6 +60,7 @@ EXPECTED_STEMS: Final[tuple[str, ...]] = (
     "migrate",
     "reset-db",
     "seed",
+    "smoke",
     "test",
     "up",
 )
@@ -118,6 +119,7 @@ TOOL_MARKERS: Final[tuple[str, ...]] = (
     "ruff format --check",
     "ruff format .",
     "scripts.seed_politicians",
+    "scripts.smoke",
     "volume ls",
     "volume rm",
 )
@@ -272,11 +274,25 @@ class TestTheScriptsExist:
         present = sorted(p.name for p in SCRIPTS_DIR.iterdir() if p.is_file())
         assert present == sorted(p.name for p in ALL_SCRIPTS)
 
-    def test_the_backend_only_entry_point_stays_in_backend_scripts(self) -> None:
-        """`scripts/seed` wraps `backend/scripts/`; it does not reimplement it."""
-        assert (REPO_ROOT / "backend" / "scripts" / "seed_politicians.py").is_file()
+    @pytest.mark.parametrize(
+        ("stem", "module"),
+        [("seed", "seed_politicians"), ("smoke", "smoke")],
+        ids=["seed", "smoke"],
+    )
+    def test_the_backend_only_entry_point_stays_in_backend_scripts(
+        self, stem: str, module: str
+    ) -> None:
+        """`scripts/seed` and `scripts/smoke` wrap `backend/scripts/`; neither reimplements it.
+
+        Both halves of each pair are a header and three lines, which is the point: the
+        behaviour is one Python module the backend suite can import and test, and the two
+        shells differ only in how they spell "run it". A wrapper that grew a step of its own
+        would immediately be a step only one operating system runs — which is exactly the
+        drift this module exists to prevent, one level up.
+        """
+        assert (REPO_ROOT / "backend" / "scripts" / f"{module}.py").is_file()
         for suffix in (".ps1", ".sh"):
-            assert "scripts.seed_politicians" in normalise(read(script("seed", suffix)), suffix)
+            assert f"scripts.{module}" in normalise(read(script(stem, suffix)), suffix)
 
 
 class TestTheScriptsParse:

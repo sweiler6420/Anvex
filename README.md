@@ -55,6 +55,7 @@ anywhere; they resolve the repo root themselves.
 | `lint` | `ruff check` + `ruff format --check`, and eslint; `backend`/`frontend`/`all` |
 | `fmt` | `ruff format` + `ruff check --fix`, backend only; `--check` writes nothing |
 | `reset-db` | delete the dev database volume, recreate, migrate and seed (asks first) |
+| `smoke` | boot the whole stack and prove it end to end — see [`docs/smoke.md`](./docs/smoke.md) |
 
 ```powershell
 .\scripts\up.ps1 frontend
@@ -88,19 +89,56 @@ the `POSTGRES_HOST=db` in `.env` — a compose service name — does not resolve
 it to `localhost` and the port compose publishes, both read from that same `.env`, so there
 is still one place to change it. Set `POSTGRES_HOST` yourself and they leave it alone.
 
-`backend/scripts/` keeps the backend-only entry points (`seed_politicians.py`); `scripts/`
-only ever wraps them, so there is one implementation of each behaviour.
+`backend/scripts/` keeps the backend-only entry points (`seed_politicians.py`, `smoke.py`);
+`scripts/` only ever wraps them, so there is one implementation of each behaviour.
+
+## End-to-end smoke
+
+`smoke` is the one command that runs the real containers, the real migrations, the real
+Postgres, the real broker and the real built bundle in the order a developer meets them —
+twenty steps from `docker compose up` to loading `/research` in a DOM with nothing but a
+refresh token. Everything else in this repository proves a component with its neighbours
+replaced by fixtures.
+
+```powershell
+.\scripts\smoke.ps1                       # against whatever is already running
+.\scripts\smoke.ps1 --clean --yes         # destroy the volumes first: a boot from nothing
+.\scripts\smoke.ps1 --skip-frontend       # API and worker only
+```
+
+```sh
+./scripts/smoke.sh
+./scripts/smoke.sh --clean --yes
+./scripts/smoke.sh --skip-frontend
+```
+
+**It spends no third-party quota by default.** The ingest step stubs AlphaVantage at the
+`app/clients/base.py` transport seam and says so in its output; `--live-vendor` opts into
+exactly one real call, for one symbol and one explicit month, with retries disabled. The
+free tier is about 25 calls a day and they are the key owner's.
+
+[`docs/smoke.md`](./docs/smoke.md) is the checklist — every step, what it proves, and what a
+failure means. A failing step names itself, what it expected and what it saw.
 
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) runs on every push to `main` and on
-every pull request. Two jobs, gated on a path filter so each stack only builds when it
+every pull request. Three jobs, gated on a path filter so each stack only builds when it
 changes:
 
 | Job | What it runs | Services |
 | --- | --- | --- |
 | **Backend** | `uv sync --locked`, then `scripts/lint.sh backend` (`ruff check` + `ruff format --check`) and `scripts/test.sh backend` with coverage | Postgres 16 and Redis 7 |
 | **Frontend** | `npm ci`, `npm run lint`, `npm run test`, `npm run build` | none |
+| **Smoke** | `cp .env.example .env`, then `scripts/smoke.sh` — the whole stack, built from nothing | it builds and starts its own, through `docker compose` |
+
+**The smoke job is the only one that proves the pieces fit together**, and the only one
+gated on *either* stack changing. It uses `docker compose` rather than `services:` because
+a service container starts before the job's first step and cannot express `up` → `migrate`
+→ `seed`, and the ordering is the thing under test. Nothing is cached, which is the
+expensive half and also the point: `smoke --clean` on a laptop destroys the volumes but not
+the images, so a boot on a machine that has never seen this repository is a claim only a
+runner can make. It never passes `--live-vendor`.
 
 **The workflow calls the scripts rather than repeating them.** Every trap the backend
 commands carry — `python -m pytest` and never the console script, the cleared `VIRTUAL_ENV`

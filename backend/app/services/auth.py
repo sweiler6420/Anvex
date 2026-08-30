@@ -127,9 +127,27 @@ class AuthService:
         Both halves are re-minted rather than just the access token. Rotating the refresh
         token on every use is what puts a bound on a stolen one in practice.
 
+        **Two things this does not do, both because a token carries no ``jti``**, and both
+        established by ANV-41's smoke run rather than assumed:
+
+        * **The presented token is not revoked.** The old refresh token keeps working until
+          it expires; there is nowhere to record that one has been spent. The documented
+          contract said "invalidates the token presented", and it does not.
+        * **The new token is not necessarily a different string.** The payload is
+          ``{sub, type, iat, exp}`` at one-second resolution, so a rotation inside the same
+          second as the mint before it produces a byte-identical token.
+
+        See the marker below and ``docs/architecture.md`` §6.
+
         :raises TokenError: malformed, expired, or the wrong half of the pair.
         :raises UnauthorizedError: the account has since been deleted.
         """
+        # TODO(ANV-refresh-revocation): a spent refresh token stays valid for its whole
+        # lifetime, and a rotation inside the same second returns the identical string.
+        # Both need the same missing thing: a `jti` claim, which makes each token unique and
+        # gives a denylist something to key on. Refusing a replay then needs somewhere to
+        # keep spent ids — a Redis set expiring with the token is the cheap version — and
+        # that is a decision about putting a second store in the auth path, not a line here.
         now = datetime.now(UTC)
         payload = decode_refresh_token(
             refresh_token,
