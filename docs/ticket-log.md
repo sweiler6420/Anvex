@@ -2057,7 +2057,7 @@ than the vocabulary. The workflow was restored from an in-memory copy after ever
 ---
 
 ### ANV-40 — Done
-Commit `024218f` on `main`, 45 files, 245 new tests (3,302 → **3,547** backend).
+Commits `024218f` and `fe45313` on `main`, 45 files, 245 new tests (3,302 → **3,547** backend).
 
 **Nothing is provisioned, and that is checkable rather than promised.** No AWS account was
 touched, no credential was used, created or looked for, and the running cost is $0.00. The
@@ -2177,3 +2177,11 @@ subtler version of the same reason: the header's first line names the variable w
 TODO, and satisfied both halves on its own. Only a pattern matching an actual
 `S3_ENDPOINT_URL = "" #  TODO…` **assignment** is about the thing the marker annotates. Assert the
 mechanism, not the vocabulary.
+
+**One defect found in review, in the deliverable itself, and it is the same class the module
+exists to prevent.** `enable_deletion_protection` on the ALB was hardcoded `false` under a comment
+reading "`false` in `local`, `true` in `dev`" — the comment was the intent and the code was not it.
+The test suite could not see it, because a hardcoded literal is not drift between two files; it is
+one file disagreeing with its own prose. `fe45313` wires `var.alb_deletion_protection` and both
+tfvars files set it. **The lesson generalises to the whole directory: every test here compares two
+artefacts, so a value that appears in only one place is checked by nothing but reading it.**
