@@ -21,6 +21,10 @@ Four properties are being pinned, and they are different properties:
    characters while bcrypt counts bytes.
 4. **``get_user`` is not a directory.** Somebody else's id and a nonexistent id produce
    byte-identical refusals, so the response never confirms another account exists.
+5. **The strength policy is applied, and it is applied first.** ANV-43's rules live in
+   ``app/domain/password.py`` and are exhaustively tested there; what the *service* owes is
+   a refusal that names the failed rules in ``details`` and costs no queries, because the
+   rule is pure and a request that cannot succeed should not touch the database.
 
 Bcrypt is genuinely slow (~250 ms a call at cost factor 12), so registrations below are
 kept to the ones that are actually about hashing.
@@ -37,6 +41,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.domain.errors import AnvexError, ConflictError, NotFoundError, ValidationError
+from app.domain.password import FAILED_RULES_DETAIL, describe_failures, failed_rules
 from app.schemas.user import UserCreate, UserOut
 from app.services import user as user_service_module
 from app.services.user import (
@@ -49,13 +54,20 @@ from app.settings import Settings
 from app.utils.security import password_byte_length, verify_password
 from tests.helpers import FakeUserRepo, StubSession, make_user
 
-PASSWORD = "correct-horse-battery"
+#: Satisfies ANV-43's strength policy, because ``register`` now applies it before anything
+#: else. ``tests/unit/test_services_auth.py`` keeps the weak original on purpose: nothing
+#: re-checks strength when a password is *verified*.
+PASSWORD = "Correct-horse-battery1"
 USERNAME = "stephen1"
 EMAIL = "stephen@example.com"
 
-#: 25 characters — inside ANV-8's 72-**character** cap — and 75 bytes, which is outside
+#: Seven lowercase letters: everything the API required before ANV-43, and nothing more.
+WEAK_PASSWORD = "aaaaaaa"
+
+#: 27 characters — inside ANV-8's 72-**character** cap — and 75 bytes, which is outside
 #: bcrypt's 72-**byte** one. The gap the translation in ``UserService._hash`` exists for.
-MULTIBYTE_PASSWORD = "漢" * 25
+#: Strong enough to get *past* the policy, so it fails on its length as intended.
+MULTIBYTE_PASSWORD = "漢" * 24 + "A1!"
 
 
 def build_settings(**overrides: Any) -> Settings:
@@ -274,6 +286,101 @@ class TestRegisterRace:
 
 
 # ---------------------------------------------------------------------------------------
+# register — the strength policy (ANV-43)
+# ---------------------------------------------------------------------------------------
+
+
+class TestWeakPassword:
+    """``app/domain/password.py`` owns the rules; this is where they become binding.
+
+    The exhaustive per-rule coverage is in ``tests/unit/test_domain_password.py`` — what is
+    asserted here is only what the *service* adds: the shape of the refusal, and that it
+    happens before anything touches the database.
+    """
+
+    async def test_a_weak_password_is_a_validation_error(self) -> None:
+        service, _, _ = build_service()
+
+        with pytest.raises(ValidationError) as caught:
+            await service.register(registration(password=WEAK_PASSWORD))
+
+        assert caught.value.code == "validation_error"
+
+    async def test_the_failed_rules_travel_in_details(self) -> None:
+        """A list, not a boolean, so the client lights up its own per-rule lines."""
+        service, _, _ = build_service()
+
+        with pytest.raises(ValidationError) as caught:
+            await service.register(registration(password=WEAK_PASSWORD))
+
+        assert caught.value.details == {
+            "field": "password",
+            FAILED_RULES_DETAIL: ["uppercase", "number", "symbol"],
+        }
+
+    async def test_the_message_names_them_as_well(self) -> None:
+        service, _, _ = build_service()
+
+        with pytest.raises(ValidationError) as caught:
+            await service.register(registration(password=WEAK_PASSWORD))
+
+        assert caught.value.message == describe_failures(failed_rules(WEAK_PASSWORD))
+
+    async def test_the_password_is_never_in_the_refusal(self) -> None:
+        service, _, _ = build_service()
+
+        with pytest.raises(ValidationError) as caught:
+            await service.register(registration(password=WEAK_PASSWORD))
+
+        assert WEAK_PASSWORD not in repr(caught.value)
+
+    async def test_nothing_is_written_hashed_or_committed(self) -> None:
+        service, repo, session = build_service()
+
+        with pytest.raises(ValidationError):
+            await service.register(registration(password=WEAK_PASSWORD))
+
+        assert repo.users == []
+        assert session.commits == 0
+
+    async def test_the_check_costs_no_queries(self) -> None:
+        """It is pure, so a request that cannot succeed must not cost two lookups first."""
+        service, repo, _ = build_service()
+
+        with pytest.raises(ValidationError):
+            await service.register(registration(password=WEAK_PASSWORD))
+
+        assert repo.calls == []
+
+    async def test_a_weak_password_beats_a_duplicate_identity_to_the_answer(self) -> None:
+        """Both are wrong; the free-to-check one is reported, and no query is made."""
+        service, repo, _ = build_service(existing_user())
+
+        with pytest.raises(ValidationError):
+            await service.register(registration(password=WEAK_PASSWORD))
+
+        assert repo.calls == []
+
+    async def test_a_strong_password_passes_straight_through(self) -> None:
+        service, _, _ = build_service()
+
+        created = await service.register(registration())
+
+        assert created.username == USERNAME
+
+    async def test_the_policy_is_the_domains_and_not_a_second_copy(self) -> None:
+        """A service that re-derived the rules could pass every test above and still drift."""
+        service, _, _ = build_service()
+
+        with pytest.raises(ValidationError) as caught:
+            await service.register(registration(password="password11"))
+
+        assert caught.value.details[FAILED_RULES_DETAIL] == [
+            failed.id for failed in failed_rules("password11")
+        ]
+
+
+# ---------------------------------------------------------------------------------------
 # register — the bcrypt byte boundary
 # ---------------------------------------------------------------------------------------
 
@@ -281,7 +388,7 @@ class TestRegisterRace:
 class TestPasswordTooLong:
     def test_the_multibyte_password_really_does_pass_the_schema(self) -> None:
         """If it did not, the translation below would be dead code and this suite a lie."""
-        assert len(MULTIBYTE_PASSWORD) == 25
+        assert len(MULTIBYTE_PASSWORD) == 27
         assert password_byte_length(MULTIBYTE_PASSWORD) == 75
 
         accepted = registration(password=MULTIBYTE_PASSWORD)
@@ -321,7 +428,8 @@ class TestPasswordTooLong:
     async def test_a_72_byte_password_is_still_accepted(self) -> None:
         """The boundary is 72 bytes, not "anything unusual"."""
         service, _, _ = build_service()
-        password = "a" * 72
+        password = "A1!" + "a" * 69
+        assert len(password.encode()) == 72
 
         created = await service.register(registration(password=password))
 

@@ -33,6 +33,7 @@ from pydantic import SecretStr
 from app.deps.auth import get_auth_service
 from app.deps.user import get_user_service
 from app.domain.auth import ACCESS_TOKEN_TYPE, create_token
+from app.domain.password import FAILED_RULES_DETAIL
 from app.services.auth import AuthService
 from app.services.user import EMAIL_TAKEN_MESSAGE, USERNAME_TAKEN_MESSAGE, UserService
 from app.settings import Settings
@@ -42,14 +43,23 @@ from tests.helpers import FakeUserRepo, StubSession, assert_error_envelope, make
 SECRET = "api-tier-jwt-secret"
 ALGORITHM = "HS256"
 
-PASSWORD = "correct-horse-battery"
+#: Satisfies ANV-43's strength policy — a capital, a digit and a symbol — because
+#: registration now applies it. ``tests/api/test_auth.py`` deliberately keeps the weak
+#: original: nothing re-checks strength at login.
+PASSWORD = "Correct-horse-battery1"
 PASSWORD_HASH = hash_password(PASSWORD)
+
+#: An account created before ANV-43, whose password the policy would refuse today. It has to
+#: keep working: see :class:`TestTheOldPasswordsStillWork`.
+LEGACY_PASSWORD = "aaaaaaa"
+LEGACY_PASSWORD_HASH = hash_password(LEGACY_PASSWORD)
 
 USERNAME = "stephen1"
 EMAIL = "stephen@example.com"
 
-#: 25 characters (inside ANV-8's cap) and 75 bytes (outside bcrypt's). Reaches the service.
-MULTIBYTE_PASSWORD = "漢" * 25
+#: 27 characters (inside ANV-8's cap) and 75 bytes (outside bcrypt's). Reaches the service —
+#: and satisfies the strength policy, so it is refused for its *length*, which is the point.
+MULTIBYTE_PASSWORD = "漢" * 24 + "A1!"
 
 USERS_URL = "/v1/users"
 ME_URL = "/v1/users/me"
@@ -202,6 +212,136 @@ class TestRegister:
 
         error = assert_error_envelope(response, status=422, code="validation_error")
         assert error["details"]["field"] == "password"
+
+
+# ---------------------------------------------------------------------------------------
+# POST /v1/users — the strength policy (ANV-43)
+# ---------------------------------------------------------------------------------------
+
+
+class TestRegisterRefusesAWeakPassword:
+    """The gap this ticket closed: the API used to enforce length and nothing else.
+
+    ANV-30's four rules were the *only* place the policy lived, so anything that was not our
+    browser form — ``curl``, the ``/docs`` page, a future mobile client — could register
+    ``aaaaaaa``. These tests are the ones that fail if the policy is ever taken back out of
+    the service, which is why they go through the real router and the real middleware rather
+    than calling the domain function.
+    """
+
+    async def test_seven_lowercase_letters_are_a_422(self, client: AsyncClient) -> None:
+        response = await client.post(USERS_URL, json=new_registration(password=LEGACY_PASSWORD))
+
+        assert_error_envelope(response, status=422, code="validation_error")
+
+    async def test_the_response_names_the_rules_that_failed(self, client: AsyncClient) -> None:
+        """``details`` is the machine-readable half — a client renders per-rule messages."""
+        response = await client.post(USERS_URL, json=new_registration(password=LEGACY_PASSWORD))
+
+        error = assert_error_envelope(response, status=422, code="validation_error")
+        assert error["details"] == {
+            "field": "password",
+            FAILED_RULES_DETAIL: ["uppercase", "number", "symbol"],
+        }
+
+    async def test_the_message_names_them_too(self, client: AsyncClient) -> None:
+        """For ``curl`` and the Swagger page, which have no rule list to light up."""
+        response = await client.post(USERS_URL, json=new_registration(password=LEGACY_PASSWORD))
+
+        error = assert_error_envelope(response, status=422, code="validation_error")
+        assert error["message"] == "Password needs an uppercase letter, a number and a symbol."
+
+    @pytest.mark.parametrize(
+        ("password", "expected"),
+        [
+            ("password1!", ["uppercase"]),
+            ("Password!!", ["number"]),
+            ("Password11", ["symbol"]),
+            ("password11", ["uppercase", "symbol"]),
+        ],
+    )
+    async def test_each_rule_is_reported_on_its_own(
+        self, client: AsyncClient, password: str, expected: list[str]
+    ) -> None:
+        response = await client.post(USERS_URL, json=new_registration(password=password))
+
+        error = assert_error_envelope(response, status=422, code="validation_error")
+        assert error["details"][FAILED_RULES_DETAIL] == expected
+
+    async def test_the_refusal_never_echoes_the_password(self, client: AsyncClient) -> None:
+        response = await client.post(USERS_URL, json=new_registration(password=LEGACY_PASSWORD))
+
+        assert LEGACY_PASSWORD not in response.text
+
+    async def test_a_non_ascii_capital_and_symbol_are_accepted(self, client: AsyncClient) -> None:
+        """``ÄNDERUNG1€`` — the password ``validator`` refused for having neither.
+
+        A server that reintroduced ``[A-Z]`` and a punctuation list would 422 here while the
+        sign-up form said the password was fine, which is worse than having no server rule.
+        """
+        response = await client.post(USERS_URL, json=new_registration(password="ÄNDERUNG1€"))
+
+        assert response.status_code == 201
+
+    async def test_nothing_is_created(self, client: AsyncClient) -> None:
+        """The refusal is a refusal, not a warning: the account must not exist afterwards."""
+        await client.post(USERS_URL, json=new_registration(password=LEGACY_PASSWORD))
+
+        login = await client.post(
+            LOGIN_URL, data={"username": "newperson", "password": LEGACY_PASSWORD}
+        )
+
+        assert_error_envelope(login, status=401, code="unauthorized")
+
+
+class TestTheOldPasswordsStillWork:
+    """The policy applies when a password is **chosen**, never when one is verified.
+
+    Every account in the legacy database predates ANV-43, so a login-time strength check
+    would lock out exactly the people who did nothing wrong. This is the test that fails if
+    somebody adds one — see ``app/domain/password.py``'s module docstring.
+    """
+
+    @pytest.fixture
+    def legacy(self, users: FakeUserRepo) -> Any:
+        return users.add(
+            make_user(
+                username="oldtimer",
+                email="old.timer@example.com",
+                password_hash=LEGACY_PASSWORD_HASH,
+            )
+        )
+
+    async def test_an_account_whose_password_the_policy_would_refuse_can_sign_in(
+        self, client: AsyncClient, legacy: Any
+    ) -> None:
+        login = await client.post(
+            LOGIN_URL, data={"username": "oldtimer", "password": LEGACY_PASSWORD}
+        )
+
+        assert login.status_code == 200
+        assert login.json()["access_token"]
+
+    async def test_and_can_still_read_its_own_account(
+        self, client: AsyncClient, legacy: Any
+    ) -> None:
+        login = await client.post(
+            LOGIN_URL, data={"username": "oldtimer", "password": LEGACY_PASSWORD}
+        )
+        token = login.json()["access_token"]
+
+        me = await client.get(ME_URL, headers={"Authorization": f"Bearer {token}"})
+
+        assert me.status_code == 200
+        assert me.json()["username"] == "oldtimer"
+
+    async def test_while_the_same_password_cannot_be_chosen_today(
+        self, client: AsyncClient
+    ) -> None:
+        """Both halves in one place, so the asymmetry is deliberate rather than accidental."""
+        response = await client.post(USERS_URL, json=new_registration(password=LEGACY_PASSWORD))
+
+        assert response.status_code == 422
 
 
 # ---------------------------------------------------------------------------------------
@@ -363,7 +503,7 @@ class TestRegisterThenSignIn:
     async def test_the_old_password_of_a_different_account_does_not_work(
         self, client: AsyncClient
     ) -> None:
-        await client.post(USERS_URL, json=new_registration(password="a-different-one"))
+        await client.post(USERS_URL, json=new_registration(password="A-different-one1"))
 
         login = await client.post(LOGIN_URL, data={"username": "newperson", "password": PASSWORD})
 

@@ -56,6 +56,15 @@ select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF"]
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
 
+[tool.ruff.lint.per-file-ignores]
+# RUF001/RUF002 flag "ambiguous" Unicode — `Ⅰ` beside `I`, `𝐀` beside `A`, `٣` beside `3`.
+# Those confusables are the *subject* of ANV-43's password policy: the rules are written with
+# `unicodedata` precisely so a capital `Ä` counts and a Roman numeral does not, and the tests
+# have to spell the characters out to prove it. Ignored in these two files and nowhere else —
+# anywhere else, a confusable in a string really is a typo.
+"app/domain/password.py" = ["RUF002"]
+"tests/unit/test_domain_password.py" = ["RUF001", "RUF002"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

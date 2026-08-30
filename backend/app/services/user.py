@@ -4,7 +4,16 @@ Written to the shape :class:`~app.services.auth.AuthService` established (``CLAU
 §3) — collaborators in the constructor, one ``async`` method per use case, a schema out,
 ``app.domain.errors`` on the way out, and the ``commit()`` here because repos only flush.
 
-Three decisions in this module are worth reading before changing it.
+Four decisions in this module are worth reading before changing it.
+
+**The password strength policy is applied here, and only where a password is chosen.**
+``app/domain/password.py`` (ANV-43) owns the rules; :meth:`UserService._refuse_weak_password`
+is what makes them binding, because until it existed the four rules on ANV-30's sign-up page
+were the only place the policy lived and ``curl`` could register ``aaaaaaa``. It runs
+**before** the duplicate pre-check — the rule is pure, so a request that cannot succeed
+should not cost two queries first — and it must never be called from a login path: see that
+module's docstring for why re-checking an *existing* password would lock out every account
+that predates the rule.
 
 **Registration answers "that is already taken", and that is a deliberate exception to the
 no-oracle rule.** ``CLAUDE.md`` §4 says an endpoint keyed on an unauthenticated identifier
@@ -50,6 +59,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.errors import ConflictError, NotFoundError, ValidationError
+from app.domain.password import FAILED_RULES_DETAIL, describe_failures, failed_rules
 from app.models import User
 from app.repos.user import UserRepo, user_repo
 from app.schemas.user import UserCreate, UserOut
@@ -110,10 +120,14 @@ class UserService:
         never logged, never stored as given, and :class:`~app.schemas.user.UserOut` has no
         field it could be returned in.
 
+        :raises ValidationError: the password fails the strength policy —
+            ``details["failed_rules"]`` says which rules — or is longer than bcrypt can hash.
         :raises ConflictError: the email address or the username is already registered —
             ``details["field"]`` says which.
-        :raises ValidationError: the password is longer than bcrypt can hash.
         """
+        # Checked first because it is pure: a request that cannot succeed should not cost
+        # two queries first, and the answer does not depend on anything in the database.
+        self._refuse_weak_password(data.password)
         await self._refuse_taken_identity(email=data.email, username=data.username)
 
         try:
@@ -175,6 +189,31 @@ class UserService:
     # -----------------------------------------------------------------------------------
     # Internals
     # -----------------------------------------------------------------------------------
+
+    @staticmethod
+    def _refuse_weak_password(password: str) -> None:
+        """Apply ``app/domain/password.py``'s policy to a password being **chosen**.
+
+        Every path that sets a password calls this — registration today, and the change
+        endpoint :class:`~app.schemas.user.PasswordChange` is waiting for. **No path that
+        *verifies* one may call it:** the policy arrived in ANV-43, every account that
+        predates it was created legitimately under the old rule, and re-checking strength at
+        login would lock those people out with a message they could not act on. See the
+        module docstring of ``app/domain/password.py``.
+
+        The refusal names the failed rules in ``details`` as well as in the sentence, so a
+        client can light up the individual requirement lines it already renders instead of
+        showing one opaque banner — the same reason ANV-30's client rules are a list rather
+        than a boolean. The submitted password is not logged and not echoed back.
+        """
+        unmet = failed_rules(password)
+        if not unmet:
+            return
+        raise ValidationError(
+            describe_failures(unmet),
+            field="password",
+            details={FAILED_RULES_DETAIL: [rule.id for rule in unmet]},
+        )
 
     async def _refuse_taken_identity(self, *, email: str, username: str) -> None:
         """Turn a duplicate into a 409 that names the field the user has to change."""

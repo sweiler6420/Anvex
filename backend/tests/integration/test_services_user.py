@@ -29,7 +29,8 @@ from app.settings import Settings
 from app.utils.security import verify_password
 from tests.factories import UserFactory
 
-PASSWORD = "correct-horse-battery"
+#: Satisfies ANV-43's strength policy, which ``register`` applies before it reaches the repo.
+PASSWORD = "Correct-horse-battery1"
 
 
 class BlindUserRepo(UserRepo):

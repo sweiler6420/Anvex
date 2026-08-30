@@ -10,9 +10,12 @@ Length ceilings mirror ``app/models/user.py`` by importing its constants rather 
 restating the numbers, so an oversized username is a 422 at the edge instead of a
 ``StringDataRightTruncation`` from Postgres — and the two cannot drift apart.
 
-Password *strength* (mixed case, a digit, a symbol) is a business rule, so it belongs in
-``app/domain/`` where ANV-12 can test it exhaustively. What lives here is the length
-envelope only.
+Password *strength* (an uppercase letter, a digit, a symbol) is a business rule, so it lives
+in ``app/domain/password.py`` — written by ANV-43, applied by
+:meth:`~app.services.user.UserService._refuse_weak_password`, tested exhaustively there, and
+mirrored rule-for-rule from ANV-30's sign-up form. What lives here is the length **envelope**
+only, and the two are not redundant: this is the HTTP edge refusing a malformed body before a
+service is reached, while the policy is the rule every *other* caller is held to as well.
 """
 
 from __future__ import annotations
