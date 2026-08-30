@@ -176,3 +176,25 @@ does not run it. `versions.tf` requires `>= 1.9.0, < 2.0.0`.
 
 See [`CLAUDE.md`](./CLAUDE.md) for the layering contract — where each kind of code belongs and
 why. It is the authoritative description of the codebase's structure.
+
+## Documentation
+
+| Document | For |
+| --- | --- |
+| [`docs/architecture.md`](./docs/architecture.md) | the system diagram, the request path, the job path, the data model, the API surface, and the **known limitations** |
+| [`docs/adr/`](./docs/adr/) | one record per decision, with the context and the costs as they actually were |
+| [`backend/docs/runbook.md`](./backend/docs/runbook.md) | starting it, migrating it, seeding it, and what to do when it will not come up |
+| [`backend/docs/testing.md`](./backend/docs/testing.md) | the three test tiers, the fixtures, and the drift tests |
+| [`backend/docs/adding-an-endpoint.md`](./backend/docs/adding-an-endpoint.md) | one real endpoint through all seven layers |
+| [`frontend/README.md`](./frontend/README.md) | running every npm command inside the container |
+| [`docs/aws-deployment.md`](./docs/aws-deployment.md) | the deploy path that has never been run, and its monthly cost |
+
+**Read the known limitations before filing a bug.** `/portfolio` is a documented
+non-feature, `POST /v1/auth/recovery` sends no mail, no route mounts the storage service,
+and the research desktop's window arrangement does not survive a reload. Each is a decision
+with its reasoning written down, in `docs/architecture.md` §6.
+
+`backend/tests/unit/test_docs.py` keeps those documents honest: every file path they name
+must exist, the documented route table must equal the application's own, the seven layers
+must be real directories, the ADRs must be numbered without gaps, and every `TODO(ANV-…)`
+they claim exists must still be in the source.

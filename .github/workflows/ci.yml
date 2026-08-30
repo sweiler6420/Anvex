@@ -74,8 +74,15 @@ jobs:
   #       layout is un-shipped on somebody else's clone rather than here (ANV-40)
   #   docs/aws-deployment.md                                test_infra_terraform.py — the
   #       cost estimate names the instance classes `envs/dev.tfvars` actually configures, so
-  #       editing one without the other is drift. The only `docs/` entry in this filter, and
-  #       only because a test reads it; `build-log.md` and `ticket-log.md` still run nothing.
+  #       editing one without the other is drift (ANV-40)
+  #   docs/architecture.md, docs/adr/**                     test_docs.py — the documented
+  #       API surface is compared against the live OpenAPI document in both directions, the
+  #       seven layers of the walkthrough against the real `app/` directories, and every
+  #       `TODO(ANV-…)` the docs promise against the file that carries it (ANV-39)
+  #
+  # Those are the only `docs/` entries and each is here because a test reads it;
+  # `build-log.md` and `ticket-log.md` are in neither filter and still run nothing, which
+  # `test_ci_workflow.py` asserts.
   #
   # A frontend-only commit that edits `SignUpPage.jsx` therefore runs the backend job too.
   # That is the whole point: skipping it there is exactly how the cross-stack guard would
@@ -104,6 +111,8 @@ jobs:
               - 'docker-compose.yml'
               - '.gitignore'
               - 'docs/aws-deployment.md'
+              - 'docs/architecture.md'
+              - 'docs/adr/**'
               - '.github/workflows/ci.yml'
             frontend:
               - 'frontend/**'

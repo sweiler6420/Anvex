@@ -1979,6 +1979,54 @@ any future edit to it:
   `NODE_ENV` over its own mode, so the frontend job counts `jsxDEV` in `dist/` and fails on
   anything but zero.
 
+### Documentation, and the drift tests that keep it true (ANV-39)
+
+**Prose is the one artefact in this repository with no compiler, so it gets a test instead.**
+`backend/tests/unit/test_docs.py` is the mechanism; the rules below are what it enforces and
+what any future documentation edit has to satisfy.
+
+- **There are four documentation homes and no fifth.** `docs/architecture.md` — the system
+  diagram, the request path, the job path, the data model, the API surface and the **known
+  limitations**. `docs/adr/` — one record per decision. `backend/docs/` — `runbook.md`,
+  `testing.md`, `adding-an-endpoint.md`, i.e. the operator's, the test author's and the
+  feature author's views. `README.md` — the index that points at all of them. This file stays
+  the *contract* (what goes where, and why); it is not a tutorial and it is not a runbook.
+- **A new route means a new row in `docs/architecture.md`'s API surface table.** The table is
+  compared against the live OpenAPI document **in both directions**, so shipping a route with
+  no row fails the backend suite, and so does a row naming a route that does not exist. The
+  same holds for the error-status table against `app/middleware/errors.py`'s
+  `ERROR_STATUS_CODES`.
+- **A new `TODO(ANV-…)` marker under `app/` or `infra/` means a new row in the known-
+  limitations table**, and the test asserts the marker is in *the file the row names* — not
+  merely somewhere in the repository. Both directions again: deleting a marker the docs
+  promise fails, and adding one the docs do not mention fails. A gap the documentation stops
+  mentioning is worse than a gap it never mentioned.
+- **Every repository path a document names in a code span must exist**, and every relative
+  markdown link must resolve. The paths are *discovered* from the documents rather than
+  listed in the test, so a document that starts naming a new file gets it checked without
+  anyone remembering to. Consequence for a writer: a sentence about a file that must **not**
+  exist has to be phrased so the path is not a bare code span (`no second .env inside
+  `frontend/``, not `` `frontend/.env` ``).
+- **An ADR is `docs/adr/NNNN-slug.md`** with an `# ADR-NNNN — Title` heading whose number
+  matches the filename, and exactly `## Status`, `## Context`, `## Decision`, `## Consequences`
+  in that order, each with a real body. Numbering is sequential from 0001 with no gaps and no
+  duplicates, and `docs/adr/README.md` lists every record and only records. Add the index row
+  in the same commit as the file.
+- **Write the context and the consequences as they actually were.** A record whose Context is
+  a tidy retrospective is worth nothing: the reversals, the premises that turned out to be
+  false and the costs accepted are the reason a future reader is reading it. ADR-0006 says the
+  ticket's premise was wrong; ADR-0004 records that this file's own §3 worked example names
+  four things that were never built. Both are more useful than the decision itself.
+- **A drift test asserts the mechanism, not the vocabulary** (ANV-38, ANV-40, and again here).
+  Nothing in `test_docs.py` matches a sentence: it parses the OpenAPI document, stats a
+  directory, reads the annotated file and resolves a real path. The controls prove it —
+  rewording a heading or a paragraph of an ADR is a *deliberate survivor*, because a document
+  is allowed to be rewritten and is not allowed to become false.
+- **A documentation drift test that reads outside `backend/` extends the CI backend path
+  filter**, per §6's rule above. ANV-39 added `docs/architecture.md` and `docs/adr/**`; they
+  are the second and third `docs/` entries, and `docs/build-log.md` / `docs/ticket-log.md` are
+  still deliberately in neither filter.
+
 ---
 
 ## 7. Infrastructure — `backend/infra/` (ANV-40)

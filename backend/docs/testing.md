@@ -3,6 +3,10 @@
 The contract is [`CLAUDE.md` §6](../../CLAUDE.md); this is how it works in practice. The
 harness lives in `backend/tests/` and is the same one every ticket writes against.
 
+Siblings: [`runbook.md`](./runbook.md) for running the stack,
+[`adding-an-endpoint.md`](./adding-an-endpoint.md) for the tests one feature ships with, and
+[`../../docs/architecture.md`](../../docs/architecture.md) for what is being tested.
+
 Run everything from `backend/`. **`uv run pytest` is blocked by an Application Control
 policy on this machine — always use `uv run python -m pytest`.**
 
@@ -196,10 +200,52 @@ Seeding is deterministic (`DEFAULT_SEED`), so a failure reproduces from
 
 ---
 
+## Drift tests
+
+A sizeable minority of `tests/unit/` tests nothing in `app/` at all. They compare two
+artefacts that have to agree and fail when they part company, and they live in the unit tier
+because they are pure reads of files — no fixtures, no I/O, no skip.
+
+| Module | Compares |
+| --- | --- |
+| `tests/unit/test_domain_password.py` | `app/domain/password.py` against the rules parsed out of `frontend/src/features/auth/components/SignUpPage.jsx` |
+| `tests/unit/test_repo_scripts.py` | every `scripts/<name>.ps1` against its `.sh` twin, and the README's command table against both |
+| `tests/unit/test_ci_workflow.py` | `.github/workflows/ci.yml` against the scripts it names, and its path filter against every repo-root file a test reads |
+| `tests/unit/test_infra_terraform.py` | `backend/infra/` against `docker-compose.yml`, `app/settings.py`, `app/api/health.py` and `docs/aws-deployment.md` |
+| `tests/unit/test_docs.py` | `docs/architecture.md`, `docs/adr/` and `backend/docs/` against the route table, the layer directories and the `TODO(ANV-…)` markers |
+| `tests/unit/test_settings.py` | `app/settings.py` against `.env.example` |
+
+Four rules, each of them learned by losing a mutation round:
+
+- **A drift test fails; it never skips.** A drift test that skips when the other half is out
+  of reach is a drift test that passes while the two halves diverge. That is why the backend
+  suite reaches into `frontend/src/` for exactly one file and *fails* when it is missing.
+- **Assert the mechanism, not the vocabulary.** "The marker is somewhere in the file" passes
+  for an implementation that deleted the marker beside the value while a paragraph three
+  screens up still quotes it. Match the assignment the marker annotates, or the command the
+  step actually runs.
+- **Parse, do not regex, a structured file.** `pyyaml` reads the workflow and `python-hcl2`
+  reads the Terraform, because a matcher that mis-models the language reports the
+  configuration is correct when it is not.
+- **Derive the list, do not restate it.** A test whose expectations are a literal copy of the
+  thing under test drifts in exactly the case that matters. Discover the routes from the
+  OpenAPI document, the use cases from `vars(XService)`, the filter's obligations from the
+  test sources.
+
+**Adding a drift test that reads outside `backend/` means adding its path to the CI backend
+path filter** — see [`../../docs/adr/0008-path-filter-is-coverage.md`](../../docs/adr/0008-path-filter-is-coverage.md).
+`test_ci_workflow.py` discovers the obligation by scanning for `REPO_ROOT / …` and will tell
+you, but only after you have written the test.
+
+---
+
 ## Writing a new test
 
 1. Decide the tier from the table at the top. When in doubt, push it down.
-2. Mirror the app's path: `app/services/watchlist.py` → `tests/integration/test_watchlist_service.py`.
+2. Mirror the app's path, layer first: `app/services/watchlist.py` →
+   `tests/integration/test_services_watchlist.py`, `app/repos/watchlist.py` →
+   `tests/integration/test_repos_watchlist.py`, `app/domain/watchlist.py` →
+   `tests/unit/test_domain_watchlist.py`.
 3. Ask for the fixtures you need and nothing more — asking for `db_session` is what makes a
    test skip without a database, so do not request it "just in case".
 4. Run `uv run python -m pytest` **and** `uv run ruff check .` before you call it done.
