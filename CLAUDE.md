@@ -804,6 +804,38 @@ authorization is not data access.
   pydantic model in the `app.schemas` package and fails on a password-ish field outside a small
   allowlist of request bodies, so a new schema is covered the moment it exists rather than when
   somebody remembers to check it.
+- **A rule the client enforces is not a rule until the server enforces it, and the drift between
+  them is tested rather than assumed.** ANV-43 found the whole password policy living in ANV-30's
+  sign-up form: the API checked length and nothing else, so `curl`, the `/docs` page and any future
+  client could register `aaaaaaa`. The shape of that fix is the pattern for every "the form already
+  checks this" rule. **(1)** The rule goes in `app/domain/` as a **pure function returning what
+  failed, not a boolean** — `failed_rules()` hands back the unmet rules in a fixed order, so the
+  refusal can name them and a client can light up its own per-rule lines instead of one opaque
+  banner. **(2)** The service raises `ValidationError` with the machine-readable ids in `details`
+  (`{"field": "password", "failed_rules": ["uppercase", "number"]}`) **and** names them in the
+  message, because `curl` and the Swagger page have no rule list to light up. **(3)** It is checked
+  **before any repo call**: the rule is pure, so a request that cannot succeed should not cost two
+  queries first. **(4)** A **drift test reads the client's source** — ids, order and both human
+  phrasings compared against the parsed array, not against a remembered copy. Where the two
+  definitions cannot be executed in one process (a JS regex), the test **pins the client's source
+  string as a tripwire** and says in its docstring that that is what it is. It **fails rather than
+  skips** when the other copy is out of reach, which is why the backend suite reaches into
+  `frontend/src/` for exactly one file — a drift test that skips is a drift test that passes while
+  the two halves diverge.
+- **A policy applies where a value is *chosen*, never where it is *verified*.** Every password
+  stored before ANV-43 predates the strength rule, so re-checking strength at login would lock out
+  the accounts that did nothing wrong, with a message indistinguishable from "wrong password".
+  `app/domain/password.py`'s docstring says so in as many words and `tests/api/test_users.py`
+  asserts it in both directions — a legacy weak password still signs in, and that same string is
+  still refused at registration. Retroactive tightening is a *prompt after* a successful sign-in,
+  never a refusal during one.
+- **Character classes are Unicode on the server too.** `\p{Lu}` is
+  `unicodedata.category(c) == "Lu"` — **not** `str.isupper()`, which also takes titlecase and
+  Other_Uppercase (`Ⅰ`); `\p{Nd}` is `== "Nd"` — **not** `str.isdigit()`, which takes `²`. Those
+  two are the substitutions a plausible implementation makes, so each has a test named after the
+  character that catches it. When a module's subject genuinely *is* confusable characters,
+  `RUF001`/`RUF002` go in `[tool.ruff.lint.per-file-ignores]` for that file **and no other** —
+  everywhere else a confusable inside a string is a typo.
 - **Containers:** the compose service names *are* the in-network hostnames the settings default
   to — `db`, `db-test`, `redis`, `minio`, `api`, `worker`, `beat`, `web`. Renaming a service is a
   config change. Containers reach each other by service name on the service's own port; the
@@ -1302,11 +1334,15 @@ and each of them is a place the sign-up port would otherwise have copied a defec
   is created with a password the user does not have. A ceiling on a *created* value is a
   validation rule that produces a message; `maxLength` is for a field whose value already
   exists elsewhere (`LoginPage`'s identifier).
-- **The client is the only place the password *strength* policy exists.** The API enforces
-  length (7–72) and nothing else — `app/schemas/user.py` says strength "belongs in
-  `app/domain/`" and no such rule was ever written. So these four rules are not a second copy
-  of a server rule that could drift; they are the policy. Worth a backend ticket, not a
-  silent assumption.
+- **~~The client is the only place the password *strength* policy exists.~~ Closed by ANV-43.**
+  It was true when this page was written — the API enforced length (7–72) and nothing else, so
+  these four rules *were* the policy — and it is why `PASSWORD_RULES` is written the way it is.
+  `app/domain/password.py` now mirrors all four, including the Unicode definitions, and
+  `tests/unit/test_domain_password.py` **parses this file** to prove the two agree. So editing
+  `PASSWORD_RULES` — an id, an order, a `label`, a `missing`, a predicate — now fails a **backend**
+  test until the server is changed to match. That is deliberate; do not delete the assertion to get
+  green. The `met` predicates are additionally pinned as source strings, because Python cannot run
+  them.
 - **A 409 names the field to fix, and the field is read from `details.field`.** Registration
   is §4's one deliberate enumeration exception, and `details.field` is the machine-readable
   half: an unrecognised field (or any other status) falls through to the form-level banner,

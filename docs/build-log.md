@@ -93,11 +93,11 @@ modified. What each contributes to Anvex:
 | ANV-34 | Dashboard widgets | **Done** |
 | ANV-35 | Interactive desktop demo | **Done** |
 | ANV-36 | Research and Portfolio pages | **Done** — *the frontend is complete* |
+| ANV-43 | Backend password strength policy | **Done** — *found by ANV-30; E3 gap closed* |
 | ANV-37 | Developer scripts | Next |
 | ANV-38 … ANV-41 | see `backlog.md` | Not started |
-| ANV-43 | Backend password strength policy | Backlog — *found by ANV-30, high priority* |
 
-**3,733 tests total** — **2,811 backend** (2,497 with Docker stopped, DB/S3/broker tiers skipping)
+**3,897 tests total** — **2,975 backend** (2,656 with Docker stopped, DB/S3/broker tiers skipping)
 and **922 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check`
 and `eslint` all clean. Container tiers genuinely execute: **276 DB**, **29 S3**, **9 broker**.
 
@@ -321,10 +321,15 @@ on success — the guard is already unmounting the page.
   neither `key` nor `__TSR_key` on it, so a hand-made `window.history.replaceState` fixture must
   include them. A real `navigate({state})` already does; this only bites test rigs.
 
-**Open backend gap found by ANV-30 (needs its own ticket):** the API enforces password **length**
-(7–72) and **nothing else**. `app/schemas/user.py` says strength "belongs in `app/domain/`" and **no
-such rule was ever written**. The four client-side rules are therefore not a mirror of a server rule
-— they are the only place the policy exists, and a non-browser client can register with `aaaaaaa`.
+**~~Open backend gap found by ANV-30~~ — closed by ANV-43.** `app/domain/password.py` mirrors the
+four client rules including their Unicode definitions, `UserService.register` refuses a weak password
+with a 422 naming the failed rules in `details.failed_rules`, and a backend test **parses
+`SignUpPage.jsx`** so the two cannot drift. Consequence for any future frontend ticket: **editing
+`PASSWORD_RULES` breaks a backend test** — an id, the order, a `label`, a `missing` phrase or a `met`
+predicate. That is the point; change the server to match rather than deleting the assertion. The
+one accepted divergence is documented at `test_the_one_known_divergence_is_astral_length…`: JS
+`.length` counts UTF-16 units and Python counts code points, so a password of four astral characters
+is 8 to the client and 4 to the server.
 
 **API contract facts the UI must respect:**
 - **Prices are quoted JSON strings**, not numbers — `"1234.5678"`. That is what preserves the fourth
@@ -354,6 +359,18 @@ such rule was ever written**. The four client-side rules are therefore not a mir
 - **`download_url` exists but no route mounts it** — whether a presigned URL should leave the API is
   an open decision, not an oversight.
 
+
+**For the remaining ops tickets — from ANV-43:**
+- **ANV-38 (CI) must check out the whole repo for the backend job.** The backend suite now reads
+  **one frontend file** — `frontend/src/features/auth/components/SignUpPage.jsx` — in
+  `tests/unit/test_domain_password.py`'s drift test, and that test **fails rather than skips** when
+  the file is absent. A sparse checkout, or a backend job running inside an image that copies only
+  `backend/`, breaks it. The message on the assertion says so.
+- **ANV-39 (docs):** the registration 422 now carries `details.failed_rules` — a list of rule ids
+  from `("length", "uppercase", "number", "symbol")`. Worth documenting beside the error envelope,
+  because it is the first `details` value that is not a scalar.
+- **ANV-41 (smoke):** any smoke script that registers an account needs a password satisfying the
+  policy. `"Correct-horse-battery1"` is the value the suites standardised on.
 
 **For the remaining ops tickets (ANV-37, 38, 39, 41) — from ANV-36:**
 - **ANV-37 (scripts):** frontend wrappers are `docker compose --profile frontend exec -T web …` and

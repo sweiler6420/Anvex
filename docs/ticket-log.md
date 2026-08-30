@@ -1839,3 +1839,75 @@ handlers answering an **empty page**, because `/research` is the default authent
 caring. An empty page is the emptiest truthful answer, so nothing can lean on it.
 
 18 mutations, 17 killed, both survivors genuine equivalent mutants recorded at the line.
+
+### ANV-43 — Done · **the E3 gap ANV-30 found**
+Commit `689594e`, 8 files, 159 new tests (2,816 → **2,975** backend). **Verified independently:**
+2,932 pass with the DB tier up (43 skipped: S3 and broker containers down), 2,656 with Docker
+stopped, 100% coverage on both `app/domain/password.py` and `app/services/user.py`, `ruff check` and
+`ruff format --check` clean.
+
+**The gap was real and the ticket's framing was exactly right.** `app/schemas/user.py` had said
+since ANV-8 that strength "belongs in `app/domain/`"; ANV-10 wrote the hashing primitives, ANV-12
+wired registration, and nobody wrote the rule. So ANV-30's four client rules were **the policy**, not
+a mirror of one, and `POST /v1/users` with `aaaaaaa` was a 201.
+
+**The policy returns the rules that failed, not a boolean** — the same decision ANV-30 made on the
+client, for the same reason `validator.isStrongPassword` was unusable there: a boolean has nothing
+to say but "invalid". `failed_rules()` returns unmet `PasswordRule`s in policy order; the service
+raises `ValidationError` with `details = {"field": "password", "failed_rules": [...]}` **and** a
+message built from the same `missing` phrases the form uses, so `curl` and the Swagger page get a
+sentence and the browser gets ids to light up its own lines with.
+
+**Checked before the duplicate pre-check.** The rule is pure, so a registration that cannot succeed
+should not cost two queries first; `test_the_check_costs_no_queries` asserts `repo.calls == []`.
+The trade-off is that a request with *both* a weak password and a taken email reports the password —
+the free-to-check failure — and that is the intended order.
+
+**The Unicode definitions are the substance of the ticket, and `unicodedata` is not
+`str.isupper()`.** `\p{Lu}` is `category(c) == "Lu"`; `str.isupper()` is **true** for `Ⅰ` (U+2160,
+`Nl`, Other_Uppercase), so the convenient spelling would have accepted a password the client
+refuses. Same for `\p{Nd}` vs `str.isdigit()`, which takes `²` (`No`). Both have a test named after
+the character that catches them, and both were confirmed by mutation.
+
+**Existing hashes do not matter, and that is written down in three places** so nobody adds a
+login-time check. `app/domain/password.py`'s docstring, `UserService._refuse_weak_password`'s
+docstring, and `TestTheOldPasswordsStillWork` — which signs in an account whose stored digest is
+`aaaaaaa` **and** asserts the same string is refused at registration, both in one class so the
+asymmetry reads as deliberate. `tests/api/test_auth.py` and `tests/unit/test_services_auth.py` keep
+their weak `"correct-horse-battery"` on purpose for the same reason.
+
+**The drift test parses `SignUpPage.jsx`.** Ids, order, `label` and `missing` are compared for real
+against the client's array; the parametrised case list runs the passwords ANV-30 argued about
+through an **independently written** oracle rather than through the implementation under test. The
+`met` predicates are JavaScript regexes Python cannot execute, so those four source strings are
+**pinned as a tripwire** and the docstring says that is what they are. It **fails rather than skips**
+when the file is missing — a drift test that skips is a drift test that passes while the halves
+diverge. Editing `PASSWORD_RULES` in the frontend now breaks a backend test; that is the feature.
+
+**One divergence found, decided and documented rather than papered over.** JavaScript's `.length`
+counts UTF-16 code units, Python's counts code points, so `𝐀𝐁𝐂𝟏!` is 9 to the client and 5 to the
+server. **Code points win**, because `app.schemas.user.Password`'s `min_length` already counts them
+and two server-side definitions of "seven characters" is worse than one client-side disagreement
+about a password nobody types. Pinned in a test that spells out both numbers.
+
+**Judgement calls worth knowing:** the length rule is in the policy even though pydantic's 7–72
+envelope makes it unreachable through HTTP — the policy has to be *complete* for callers that do not
+arrive through that schema, and a three-rule server beside a four-rule client is exactly the drift
+this ticket exists to remove. The bcrypt **ceiling** stays out: it is the hashing primitive's, it is
+counted in bytes while every rule counts characters, and `_hash` already translates it to the same
+422. And `RUF001`/`RUF002` are ignored **for these two files only** — a module whose subject is
+confusable characters cannot avoid them, and anywhere else a confusable is a typo.
+
+**Fixtures the policy forced, and each is a small improvement:** the registration password in three
+suites became `"Correct-horse-battery1"`; `MULTIBYTE_PASSWORD` became `"漢"*24 + "A1!"` — still 75
+bytes, so it still proves the bcrypt translation, but now strong enough to *reach* it rather than
+being stopped one layer earlier; and the 72-byte boundary case is `"A1!" + "a"*69` with the byte
+count asserted rather than implied.
+
+**8 mutations, 8 killed.** Policy call deleted from `register` → 17 failures across the API and
+service tiers. `\p{Lu}` → `str.isupper()` → the Roman-numeral test alone. `\p{Nd}` → `str.isdigit()`
+→ the superscript test alone. Symbol rule → a fixed ASCII punctuation set → 22 failures including
+the API's `ÄNDERUNG1€` registration. `failed_rules()` truncated to the first failure → 14, including
+every `describe_failures` sentence. A rule id renamed in the **domain** → 3 drift failures. The
+client's `\p{Lu}` regex changed to `[A-Z]` → the pinned-predicate tripwire. The client's `missing`
+phrase reworded → the phrasing-agreement test. Every mutant was reverted and the suite re-run green.
