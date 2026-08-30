@@ -1990,3 +1990,66 @@ above. Every mutant was reverted and the file hashes checked against a pre-mutat
 is absent — a POSIX shell on a bare Windows box, PowerShell on a Linux runner. Missing, unpaired,
 undocumented or divergent scripts *fail*, on any machine. `sh` is located by falling back to the
 Git for Windows installation, since it is not on PATH here.
+
+### ANV-38 — Done
+Commit `d25eb8d` on `main`, 5 files, 64 new tests (3,238 → **3,302** backend).
+**Verified on the real thing:** [run #1](https://github.com/sweiler6420/Anvex/actions/runs/33286412040)
+— green on the first push, every step of all three jobs `success`. Locally: 3,268 passed / 34
+skipped (S3 tier and the opt-in compose tier), 922 frontend, `ruff check`, `ruff format --check`
+and `eslint` clean, and `actionlint 1.7.12` reports 0 errors on the workflow.
+
+**Two jobs, and neither re-spells a command.** The backend job is `uv sync --locked`,
+`scripts/lint.sh backend`, `scripts/test.sh backend --cov-report=xml -rs`; the frontend job is
+`npm ci`, `npm run lint`, `npm run test`, `npm run build`. That asymmetry is deliberate and is the
+main judgement call: `scripts/` exists to hold the backend's traps (`python -m pytest` and never
+the console script, the cleared `VIRTUAL_ENV`, the resolved `uv`), so CI calls it rather than
+copying it — but the *only* thing `scripts/lint.sh frontend` adds is `docker compose exec -T web`,
+which exists because the dev host has no node. A Linux runner has node, so the container would be
+pure cost, and `package.json` is already the one definition those wrappers call. Consequence:
+**no `build` pair was added to `scripts/`.** ANV-37 left that open; building inline is the other
+half of the same decision, and it avoids a script that only CI would ever run.
+
+**The path filter was the part worth thinking about, because a filter deletes coverage silently.**
+`backend/**` alone would have skipped the backend job on a commit that edits `SignUpPage.jsx` —
+which is precisely the commit ANV-43's client/server password-drift test exists to catch. The
+backend filter therefore also matches `SignUpPage.jsx`, `frontend/package.json`, `scripts/**`,
+`README.md`, `CLAUDE.md`, `.env.example` and `docker-compose.yml`: every repo-root file a backend
+test reads. And the test does not take that list on trust — it **scans the test sources for
+`REPO_ROOT / …`** and asserts each discovered path matches the filter, so the next cross-boundary
+read extends the obligation by itself. `.env` is the one documented exclusion: it is gitignored, so
+it can never appear in a diff.
+
+**A skip is not a pass, and on a runner that is the whole risk.** Every service tier skips politely
+when its container is absent (`CLAUDE.md` §6) — correct on a developer's machine, and on CI the
+difference between "the suite ran" and "the suite reported success having run nothing". So the
+backend job asserts `database.unavailable_reason()` and `broker.unavailable_reason()` are both
+`None` before pytest starts, and asserts `pwsh` exists so ANV-37's eleven `.ps1` parser tests
+execute instead of skipping. Both steps passed on the first run — `pwsh` ships in the
+`ubuntu-latest` image, so nothing had to be installed.
+
+**No MinIO service container.** The image needs `server /data` as an *argument*, and a GitHub
+service container can override an entrypoint but cannot pass arguments. The S3 tier therefore skips
+in CI (14 tests) and says so. Fixing it means an image with a default command or a `docker run`
+step, which is a decision for its own ticket rather than a workaround buried in a YAML file.
+
+**Judgement calls.** Push builds `main` only, because a pull request already builds its branch and
+both triggers would build a PR branch twice. Actions are pinned to commit SHAs with a `# vX.Y.Z`
+comment, and `test_ci_workflow.py` fails on a floating tag *and* on a pin without its comment.
+`dorny/paths-filter` is the one third-party action, taken because `on.<event>.paths` filters the
+workflow rather than a job, and its filters are declarative enough for a test to reason about.
+`uv sync --locked` rather than a plain sync: a `pyproject.toml` edit that never regenerated
+`uv.lock` fails loudly instead of resolving to something no developer has. `pyyaml` joins the
+backend dev group for the one test module that parses the workflow.
+
+**21 mutations, 21 killed after two rounds.** Dropping `SignUpPage.jsx` from the backend filter →
+the drift-coverage test *and* the source-derived one. Widening `backend/**` to `**/*.py` → the
+matcher's own "shapes I can reason about" refusal. `./scripts/test.sh` → `uv run python -m pytest`
+→ two tests. `NODE_ENV: development` in the frontend job, an unpinned action, a pin without its
+version comment, `POSTGRES_TEST_PORT: 5433`, a `sparse-checkout: backend`, deleting the `pwsh`
+step, removing the frontend job's `if:`, `if-no-files-found: warn`, dropping `pull_request`,
+calling a `scripts/verify.sh` that does not exist, `npm run test:ci`, and an unclosed bracket (→ 65
+failures) were all caught. **Two survivors, both of which improved the suite**: replacing the
+reachability probe with `: <<'PY'` — a heredoc fed to the null command — left every word of the
+probe in the file and ran none of it, and hard-coding `count=0` left the step's own echo line
+saying `jsxDEV`. Both tests now assert the *mechanism* (`uv run python`, `grep -c 'jsxDEV'`) rather
+than the vocabulary. The workflow was restored from an in-memory copy after every mutation.

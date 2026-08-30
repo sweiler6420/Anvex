@@ -29,7 +29,7 @@ is the handoff document, and it is kept short on purpose.
 | **A native `postgresql-x64-18` service owns host port 5432** (auto-start, PID confirmed) | compose publishes `db` on **5442**. On Windows the native server *and* Docker's proxy both bind 5432 successfully, so a host client silently reaches the wrong database with no error |
 | **`uv run pytest` is blocked by an Application Control policy** (`os error 4551`) | always use `uv run python -m pytest`; `uv run ruff` is fine |
 | No `node` / `npm` installed | all frontend tooling runs **inside Docker** |
-| `gh` CLI installed 2026-08-28, on the *user* PATH | only shells started afterwards resolve it; older ones need the full path |
+| `gh` CLI installed 2026-08-28, on the *user* PATH, and **not authenticated** | older shells need the full path; `gh run watch` is unavailable — the repo is public, so poll `api.github.com/repos/sweiler6420/Anvex/actions/runs` instead (logs are 403, step conclusions are not) |
 | Docker daemon frequently stopped | check before depending on it |
 | Bash tool sandbox has a minimal PATH | use the PowerShell tool for uv / docker / git |
 
@@ -95,10 +95,11 @@ modified. What each contributes to Anvex:
 | ANV-36 | Research and Portfolio pages | **Done** — *the frontend is complete* |
 | ANV-43 | Backend password strength policy | **Done** — *found by ANV-30; E3 gap closed* |
 | ANV-37 | Developer scripts | **Done** |
-| ANV-38 | CI pipeline | Next |
-| ANV-39 … ANV-41 | see `backlog.md` | Not started |
+| ANV-38 | CI pipeline | **Done** — *green on the first push* |
+| ANV-39 | Documentation and ADRs | Next |
+| ANV-40 … ANV-41 | see `backlog.md` | Not started |
 
-**4,160 tests total** — **3,238 backend** (2,919 with Docker stopped, DB/S3/broker tiers skipping)
+**4,224 tests total** — **3,302 backend** (2,919 with Docker stopped, DB/S3/broker tiers skipping)
 and **922 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check`
 and `eslint` all clean. Container tiers genuinely execute: **276 DB**, **29 S3**, **9 broker**.
 
@@ -367,24 +368,13 @@ is 8 to the client and 4 to the server.
 
 
 **For the remaining ops tickets — from ANV-43:**
-- **ANV-38 (CI) must check out the whole repo for the backend job.** The backend suite now reads
-  **one frontend file** — `frontend/src/features/auth/components/SignUpPage.jsx` — in
-  `tests/unit/test_domain_password.py`'s drift test, and that test **fails rather than skips** when
-  the file is absent. A sparse checkout, or a backend job running inside an image that copies only
-  `backend/`, breaks it. The message on the assertion says so.
 - **ANV-39 (docs):** the registration 422 now carries `details.failed_rules` — a list of rule ids
   from `("length", "uppercase", "number", "symbol")`. Worth documenting beside the error envelope,
   because it is the first `details` value that is not a scalar.
 - **ANV-41 (smoke):** any smoke script that registers an account needs a password satisfying the
   policy. `"Correct-horse-battery1"` is the value the suites standardised on.
 
-**For the remaining ops tickets (ANV-38, 39, 41) — from ANV-36:**
-- **ANV-38 (CI):** the frontend suite is **922 tests in ~13 s and needs no services** — `web` alone,
-  no db/redis/minio, so that job can be fast and independent of the backend's. Two traps: the build
-  must be asserted to emit **`jsxDEV: 0`** (an inherited `NODE_ENV=development` silently ships a
-  330 kB dev build with no warning), and the suite's **only** expected stderr is
-  `harness.test.jsx`'s deliberate unmocked-request line — a check that fails on any stderr must
-  allow that one. Also gate `ruff format --check`.
+**For the remaining ops tickets (ANV-39, 41) — from ANV-36:**
 - **ANV-39 (docs):** **`/portfolio` is a documented non-feature, not a bug** — say so, or the first
   reader files it. Likewise: **the research desktop's window arrangement does not survive a
   reload**, which is the highest-value follow-up on that page. The cosmetic issues in the ported
@@ -401,20 +391,7 @@ is 8 to the client and 4 to the server.
 - **Known follow-ups worth tickets:** desktop layout persistence (needs an API endpoint — there is
   none), and a holdings model + quote source before `/portfolio` can be real.
 
-**For the remaining ops tickets (ANV-38, 39, 40, 41) — from ANV-37:**
-- **ANV-38 (CI): call `scripts/`, do not re-spell the commands in YAML.** Every trap the workflow
-  could hit is already encoded there, and a workflow with its own copy of `uv run python -m pytest`
-  is the second implementation this ticket exists to prevent. The Linux runner uses the `.sh` half;
-  `backend/tests/unit/test_repo_scripts.py` is what keeps it equal to the `.ps1` half. Practical
-  notes: the backend job needs **the whole repo checked out** (that suite reads `scripts/` *and*
-  `frontend/src/.../SignUpPage.jsx`); `scripts/lint.sh backend` is already `ruff check` +
-  `ruff format --check`; `scripts/test.sh frontend` starts `web` with `--no-deps`, so the frontend
-  job needs no services; and **`scripts/` has no `build` command** — ANV-38 either adds one as a
-  pair (plus a README row, or the smoke test fails) or builds inline. If it adds one, the build
-  must mount the **repo root**, not `frontend/`, because Vite's `envDir` reaches one level up.
-- **ANV-38 also inherits two parser tests that skip on a runner:** `sh -n` is present on Linux, but
-  `powershell`/`pwsh` may not be — the `.ps1` half then goes unparsed. Installing `pwsh` on the
-  frontend or lint job is a cheap way to keep both halves genuinely checked in CI.
+**For the remaining ops tickets (ANV-39, 40, 41) — from ANV-37:**
 - **ANV-40 (AWS skeleton):** `migrate`, `seed` and `reset-db` reach Postgres by translating `.env`'s
   `POSTGRES_HOST=db` to `localhost` plus the published port, in `_common` only. Anything that runs
   those against a real RDS just sets `POSTGRES_HOST` in the environment — the translation stands
@@ -426,3 +403,44 @@ is 8 to the client and 4 to the server.
 - **Where `fmt` stops:** it is backend-only, because the frontend has no formatter — eslint is a
   linter and prettier is not installed. Adding prettier is a repo-wide diff and wants its own
   ticket; until then `lint frontend` is the whole frontend story, and the `fmt` header says so.
+
+**For the remaining ops tickets (ANV-39, 40, 41) — from ANV-38:**
+- **CI exists and is green, so every later ticket has a verifier.**
+  [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs `Backend` and `Frontend` on every
+  push to `main` and every pull request; `backend/tests/unit/test_ci_workflow.py` (64 tests) is what
+  guards it. **A push that only touches `docs/` runs neither job** — that is the path filter working,
+  not CI being broken.
+- **Adding a test that reads outside `backend/` means adding its path to the backend filter.**
+  `test_ci_workflow.py` discovers those paths by scanning the test sources for `REPO_ROOT / …` and
+  fails if one is not covered, so it will tell you — but it fails *after* you write the test, not
+  before. Currently covered: `scripts/**`, `SignUpPage.jsx`, `frontend/package.json`, `README.md`,
+  `CLAUDE.md`, `.env.example`, `docker-compose.yml`.
+- **ANV-39 (docs):** the workflow's own header comment and `README.md`'s `## Continuous integration`
+  section are the current CI documentation, and a test asserts the README section names both jobs and
+  explains why the backend filter reaches into the frontend. **Two ADR-shaped decisions are already
+  argued in prose and want a home:** CI calls `scripts/` for the backend but `package.json` for the
+  frontend (the wrappers only add a container the runner does not need), and a path filter is
+  treated as coverage-deleting — which is why the backend filter is wider than `backend/**`.
+- **ANV-40 (AWS skeleton):** the workflow is **read-only** — `permissions: contents: read` plus
+  `pull-requests: read`, no `id-token`, no secrets, no deploy step. Anything that pushes an image or
+  assumes a role needs `permissions: id-token: write` on *that job only* and should be a separate
+  workflow file rather than a third job here, so a deploy credential is never in scope for a test
+  run. `POSTGRES_HOST` set in the environment is still the one supported way to point host-side
+  tooling at RDS (from ANV-37) — CI does the same thing with `POSTGRES_TEST_HOST`.
+- **ANV-41 (smoke):** a smoke job is a **third job in this workflow**, not a fourth top-level file,
+  and it needs the boot sequence a service container cannot express (`up core` → `migrate` → `seed`)
+  — so it wants `docker compose` on the runner rather than `services:`. If it adds `scripts/smoke`
+  as a pair, remember the README table row, and remember that `test_ci_workflow.py` asserts every
+  `./scripts/*.sh` the workflow names actually exists.
+- **The S3 tier does not run in CI** — 14 tests skip. GitHub service containers can override an
+  entrypoint but cannot pass arguments, and `minio/minio` needs `server /data`. An image with a
+  default command, or a `docker run` step in a smoke job, are the two ways back; both are decisions
+  rather than fixes.
+- **`gh` is installed but unauthenticated**, so a session cannot watch a run through it. The repo is
+  **public**, so `https://api.github.com/repos/sweiler6420/Anvex/actions/runs` and
+  `…/actions/runs/<id>/jobs` answer unauthenticated and give per-step conclusions — enough to verify
+  a run end to end. **Log bodies are 403 without a token**, so exact test counts have to come from
+  the local run. 60 requests/hour: poll every 25 s, not every 2 s.
+- **`actionlint` validates the workflow locally with no Docker**: the Windows binary from the
+  `rhysd/actionlint` GitHub release runs standalone. `docker pull` failed on this machine with a DNS
+  error for `production.cloudfront.docker.com`, which may recur.

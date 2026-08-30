@@ -1943,6 +1943,42 @@ migrates `db-test`), `tests/helpers.py` (shared assertions and stubs), `tests/fa
 - Cover: auth flow (login/refresh/logout/guard redirects), route guards, forms and their
   validation, and any non-trivial pure logic (bin-packing algorithms, widget math).
 
+### Continuous integration
+`.github/workflows/ci.yml` — two jobs, `Backend` and `Frontend`, on every push to `main` and every
+pull request, each gated on a path filter computed by a `changes` job. Conventions that hold for
+any future edit to it:
+
+- **CI calls `scripts/`; it does not re-spell the commands.** `scripts/lint.sh backend` and
+  `scripts/test.sh backend` are the whole backend job. Every trap those commands carry —
+  `python -m pytest` and never the console script, the cleared `VIRTUAL_ENV` — is encoded once and
+  tested once, in `tests/unit/test_repo_scripts.py`. A `run:` step naming `pytest`, `ruff` or
+  `alembic` directly is a second implementation, and `tests/unit/test_ci_workflow.py` fails on it.
+  The frontend job calls the `package.json` scripts directly instead, because the only thing the
+  `scripts/` wrappers add there is `docker compose exec -T web`, and that exists solely because the
+  dev host has no node.
+- **Both jobs check out the whole repository.** Several backend tests read files outside `backend/`
+  and *fail* rather than skip when they are missing; Vite's `envDir` points one level above
+  `frontend/`. Never narrow a checkout.
+- **A path filter can silently delete coverage, so the backend filter reaches outside `backend/`.**
+  It matches `frontend/src/features/auth/components/SignUpPage.jsx`, `frontend/package.json`,
+  `scripts/`, `README.md`, `CLAUDE.md`, `.env.example` and `docker-compose.yml` — every repo-root
+  file a backend test reads. `test_ci_workflow.py` discovers that list by scanning the test sources
+  for `REPO_ROOT / …`, so a new cross-boundary read extends the filter's obligations automatically.
+  **Adding a test that reads outside `backend/` means adding its path to the filter.**
+- **A skip is not a pass.** Every service tier skips politely when its service is absent (the rule
+  above), which on a runner would turn a wiring mistake into a green tick over a suite that tested
+  nothing. The backend job therefore asserts `database.unavailable_reason()` and
+  `broker.unavailable_reason()` are both `None` *before* running the suite, and asserts `pwsh` is
+  present so the `.ps1` parser tests execute rather than skip. **Any new tier that can skip needs
+  the same two lines.**
+- **Every action is pinned to a commit SHA** with its version in a trailing `# vX.Y.Z` comment.
+- **`ruff format --check` is a gate, permanently.** It lives inside `scripts/lint.sh`, so the
+  script and the workflow are checked separately: the formatter was unenforced until ANV-15 and had
+  drifted across 37 files.
+- **Nothing sets `NODE_ENV`, and the build is checked afterwards.** Vite honours an inherited
+  `NODE_ENV` over its own mode, so the frontend job counts `jsxDEV` in `dist/` and fails on
+  anything but zero.
+
 ---
 
 ## 7. Working agreement for agents
