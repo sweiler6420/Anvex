@@ -67,6 +67,7 @@ beat_memory          = 512
 # --platform linux/arm64`, and the mismatch fails at task start rather than at deploy.
 cpu_architecture = "X86_64"
 
+alb_deletion_protection   = false # Throwaway: a destroy should actually destroy.
 enable_container_insights = false
 log_retention_days        = 7
 

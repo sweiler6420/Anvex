@@ -17,9 +17,10 @@ resource "aws_lb" "this" {
   subnets            = var.public_subnet_ids
   security_groups    = [var.alb_security_group_id]
 
-  # An ALB that can be deleted by a `terraform destroy` in the wrong directory takes the
-  # whole public surface with it. Cheap insurance; `false` in `local`, `true` in `dev`.
-  enable_deletion_protection = false
+  # An ALB that a `terraform destroy` in the wrong directory can delete takes the whole
+  # public surface with it. Cheap insurance, and per-environment for the same reason
+  # `postgres_deletion_protection` is: `false` in `local`, `true` in `dev`.
+  enable_deletion_protection = var.alb_deletion_protection
 
   # Longer than any request the API makes, because an ALB that gives up mid-response
   # produces a 504 the application never sees and cannot log. The slowest path here is an

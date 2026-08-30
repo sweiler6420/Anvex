@@ -61,6 +61,7 @@ beat_cpu             = 256
 beat_memory          = 512
 cpu_architecture     = "X86_64"
 
+alb_deletion_protection   = true # Deleting this deletes the public surface. Do it on purpose.
 enable_container_insights = false
 log_retention_days        = 30
 

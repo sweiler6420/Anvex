@@ -126,6 +126,11 @@ variable "acm_certificate_arn" {
   type        = string
 }
 
+variable "alb_deletion_protection" {
+  description = "Refuse to delete the load balancer. The public surface's equivalent of the database's."
+  type        = bool
+}
+
 variable "enable_container_insights" {
   description = "ECS Container Insights."
   type        = bool

@@ -271,6 +271,11 @@ variable "cpu_architecture" {
   }
 }
 
+variable "alb_deletion_protection" {
+  description = "Refuse `terraform destroy` on the load balancer. The public surface's equivalent of `postgres_deletion_protection`."
+  type        = bool
+}
+
 variable "enable_container_insights" {
   description = "ECS Container Insights. Real per-metric CloudWatch charges, so it is off by default."
   type        = bool

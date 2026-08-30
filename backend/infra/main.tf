@@ -115,6 +115,7 @@ module "compute" {
 
   api_port                  = local.api_port
   acm_certificate_arn       = var.acm_certificate_arn
+  alb_deletion_protection   = var.alb_deletion_protection
   enable_container_insights = var.enable_container_insights
   log_retention_days        = var.log_retention_days
   log_level                 = var.log_level
