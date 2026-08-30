@@ -69,6 +69,13 @@ jobs:
   #   CLAUDE.md                                             test_settings.py's repo-root probe
   #   .env.example                                          test_settings.py's key parity
   #   docker-compose.yml                                    the service names the scripts use
+  #   .gitignore                                            test_infra_terraform.py — the
+  #       `!backend/infra/envs/*.tfvars` exception, without which the Terraform variable
+  #       layout is un-shipped on somebody else's clone rather than here (ANV-40)
+  #   docs/aws-deployment.md                                test_infra_terraform.py — the
+  #       cost estimate names the instance classes `envs/dev.tfvars` actually configures, so
+  #       editing one without the other is drift. The only `docs/` entry in this filter, and
+  #       only because a test reads it; `build-log.md` and `ticket-log.md` still run nothing.
   #
   # A frontend-only commit that edits `SignUpPage.jsx` therefore runs the backend job too.
   # That is the whole point: skipping it there is exactly how the cross-stack guard would
@@ -95,6 +102,8 @@ jobs:
               - 'CLAUDE.md'
               - '.env.example'
               - 'docker-compose.yml'
+              - '.gitignore'
+              - 'docs/aws-deployment.md'
               - '.github/workflows/ci.yml'
             frontend:
               - 'frontend/**'

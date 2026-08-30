@@ -39,8 +39,19 @@ miniodata/
 .terraform/
 *.tfstate
 *.tfstate.*
+# A `.tfvars` normally holds credentials, hence the blanket rule. `backend/infra/envs/`
+# deliberately holds none: every secret in that configuration lives in Secrets Manager and
+# Terraform never learns its value (ANV-40, `backend/infra/modules/secrets/main.tf`). The
+# `local` / `dev` variable sets are the layout the ticket asked for and are worthless
+# uncommitted, so they are excepted here — and `backend/tests/unit/test_infra_terraform.py`
+# asserts both that this exception is still in place and that nothing secret-shaped has
+# appeared in the files it uncovers.
 *.tfvars
 !*.tfvars.example
+!backend/infra/envs/*.tfvars
+# Backend configuration for the partial `backend "s3" {}` block. It names a real state
+# bucket, so it is supplied at init time and never committed.
+*.tfbackend
 
 # --- Editors / OS ---
 .vscode/

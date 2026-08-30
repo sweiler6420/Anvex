@@ -1981,7 +1981,58 @@ any future edit to it:
 
 ---
 
-## 7. Working agreement for agents
+## 7. Infrastructure — `backend/infra/` (ANV-40)
+
+Terraform for the eventual AWS target. **Nothing here has ever been applied**, and the whole
+directory is written so that staying true is checkable rather than remembered:
+`backend/tests/unit/test_infra_terraform.py` parses it with a real HCL2 parser and enforces
+everything below. `docs/aws-deployment.md` is the deploy path and the monthly cost;
+`backend/infra/README.md` is the map. Conventions that hold for any future edit:
+
+- **Local development never depends on it, and nothing applies it.** No `scripts/` pair, no CI
+  job, no compose service. `terraform apply`, `destroy`, `plan` and `import` appear in no script
+  and no workflow — a plan reaches a real account, so a workflow that can run one holds a
+  credential that could do more. A deploy needs `permissions: id-token: write` on its own job in
+  a **separate workflow file** (ANV-38). Terraform is not a repository dependency: nothing
+  installs it and no version is pinned to a lockfile, only `>= 1.9.0, < 2.0.0` in `versions.tf`.
+- **Verification is credential-free**, and that is a design constraint rather than a
+  convenience: `backend "s3" {}` is a *partial* backend, so `terraform init -backend=false &&
+  terraform validate && terraform fmt -check -recursive` is the whole check and no real state
+  bucket is named in a public repository.
+- **No secret value is ever in Terraform.** No `aws_secretsmanager_secret_version`, no
+  `aws_iam_access_key`, no `aws_ssm_parameter` — every one of them writes plaintext into the
+  state file, and `sensitive = true` marks an *output*, not state. So `modules/secrets` creates
+  named, empty secrets a human fills in, and RDS generates its own master password
+  (`manage_master_user_password`) with Terraform learning only the ARN. **The consequence is
+  real: an ECS task will not start until every secret has a value.** That is the correct failure.
+- **Nothing account- or region-specific is written down.** The account comes from
+  `data.aws_caller_identity`, the partition from `data.aws_partition` (so an ARN is
+  `arn:${var.partition}:…`, never `arn:aws:…`), and the region from `var.aws_region`, which has
+  no default. A literal region belongs in a `.tfvars` and nowhere else.
+- **`local` / `dev` is the variable layout, and `local` is not a deployment.** It is the sizing
+  that mirrors `docker-compose.yml` one for one, so the cost document has an honest floor and the
+  two topologies are diffable. Both files are **committed** — `.gitignore` carries an explicit
+  `!backend/infra/envs/*.tfvars` exception, because these hold no secrets — and every variable
+  without a default must be set by *both*.
+- **Every variable declared is referenced and every variable referenced is declared**, per
+  configuration directory, with a description and a type; every module call passes every required
+  input and reads only outputs that exist.
+- **The task definitions are the deployment's half of `app/settings.py`'s contract.**
+  `modules/compute/locals.tf` holds `container_environment` and `container_secrets`, and their
+  union is exactly `Settings`' fields upper-cased — asserted in both directions. `app/settings.py`
+  is the only module allowed to read the environment (§4), so a new field with no home there is a
+  deployment silently running on a default. **A new `Settings` field means editing that file.**
+- **The AWS shapes are read off the local topology, not invented.** One ECR repository, because
+  compose runs one image for all three services; the worker and beat command lines are compose's,
+  character for character; the engine versions track the compose image tags; the S3 lifecycle
+  filters on `app.domain.storage.EXPORTS_PREFIX` and expires at `EXPORT_RETENTION`; the target
+  group polls `/health/ready` while the container polls `/health`, per `app/api/health.py`; and
+  `beat` is pinned to one task that is stopped before its replacement starts. Each of those is a
+  drift test — change one side and the backend suite fails.
+
+---
+
+## 8. Working agreement for agents
 
 1. Read this file before writing code. Follow §3 literally.
 2. Stay in your ticket's scope. Do not refactor neighbouring layers opportunistically.
@@ -1993,7 +2044,7 @@ any future edit to it:
 
 ---
 
-## 8. Provenance
+## 9. Provenance
 
 Anvex replaces three earlier repos: `AverageInvestorApi` (sync FastAPI), `AverageInvestorService`
 (standalone AlphaVantage ETL for EC2/Lambda), and `AverageInvestorWeb` (CRA React). The service

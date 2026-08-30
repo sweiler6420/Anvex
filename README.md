@@ -144,6 +144,34 @@ every npm, vite, vitest and eslint command runs inside the `web` container. See
 [`backend/docs/testing.md`](./backend/docs/testing.md) for the test tiers and what each one
 needs running.
 
+## Deployment
+
+There isn't one yet. [`backend/infra/`](./backend/infra/) holds a Terraform skeleton for the
+eventual AWS target — VPC, RDS, ElastiCache, S3, ECR, three ECS Fargate services behind an
+ALB, and Secrets Manager — that has **never been applied**: no AWS account has been touched,
+no credential exists, and the running cost is $0.00. It is reviewable configuration and
+nothing more.
+
+[`docs/aws-deployment.md`](./docs/aws-deployment.md) is the deploy path it implies and an
+itemised monthly cost for actually standing it up (**≈ $110/month at the floor, ≈ $161 for a
+usable `dev`** — of which the load balancer and the NAT gateway are ~$55 before a single
+container runs). Read that before deciding.
+
+**Local development does not depend on any of it.** `docker compose up` is the whole local
+story, and `backend/tests/unit/test_infra_terraform.py` asserts that nothing under
+`scripts/`, `docker-compose.yml` or `.env.example` even mentions Terraform — and that no
+script or workflow runs `terraform apply`.
+
+Verifying the configuration needs no AWS account:
+
+```sh
+cd backend/infra
+terraform init -backend=false && terraform validate && terraform fmt -check -recursive
+```
+
+Terraform is not a repository dependency: nothing installs it, no script calls it, and CI
+does not run it. `versions.tf` requires `>= 1.9.0, < 2.0.0`.
+
 ## Architecture
 
 See [`CLAUDE.md`](./CLAUDE.md) for the layering contract — where each kind of code belongs and
