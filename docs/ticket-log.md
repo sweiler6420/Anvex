@@ -2271,3 +2271,90 @@ still run nothing, and `test_ci_workflow.py` asserts that.
 **Ruff formats Python code blocks inside Markdown.** `ruff format --check` flagged
 `backend/docs/adding-an-endpoint.md` for missing blank lines between top-level definitions in two
 fenced `python` blocks. Worth knowing before writing another backend doc: run `fmt` on it.
+
+### ANV-41 — Done · **the last ticket; the backlog is complete**
+Commit `5dfc945`, 13 files, 122 new tests (3,873 → **3,995** backend; frontend
+unchanged at 922). **Verified independently:** the full suite green, `ruff check`,
+`ruff format --check` and `eslint` clean, and the smoke run itself green **twice** — once from a
+destroyed-volume clean slate (27 s) and once against a warm stack (12 s).
+
+`scripts/smoke.{ps1,sh}` + `backend/scripts/smoke.py` + [`docs/smoke.md`](./smoke.md). **Twenty
+steps**, `docker compose up` → migrate → seed → health → CORS → register → log in → exchange a
+pair → read the seeded roster → a security → ingest one symbol-month → broker/worker/result
+backend → publish the real ingest task → read the candles back → a watchlist → build the bundle →
+**load `/research` in a DOM with nothing but a refresh token**. Final line of a passing run:
+`cold start on /research: "Showing 1 of 1.", IBM listed, stored refresh token rotated`.
+
+**It found two things, one root cause, and neither stops the stack coming up** — which is exactly
+why nothing before a whole-stack run had noticed. **A refresh token carries no `jti`**, so a spent
+one is **never revoked** (`architecture.md` said the route "invalidates the token presented"; it
+answers 200) and the "new" token is **not necessarily a different string** (`{sub, type, iat, exp}`
+at one-second resolution, so a rotation in the same second is byte-identical — the first assertion
+of inequality failed *intermittently*, which is how it was found). Every existing test mocked one
+side or the other of that exchange. The document is corrected, §6 carries the row, and
+`TODO(ANV-refresh-revocation)` marks the place. **The code was not changed** beyond the marker and
+its docstring: a `jti` plus a denylist is a second store in the auth request path, i.e. its own
+ticket.
+
+**The ticket said `smoke.ps1`; the repository convention says a pair, and the convention won.**
+`test_repo_scripts.py` enforces pair parity, a README row, shebang/LF/exec-mode and the per-language
+machine rules — a lone `.ps1` fails 24 tests. Both halves are a header and three lines, because the
+behaviour is a `backend/scripts/` entry point the backend suite can import, exactly like `seed`.
+
+**Every failure names the step, what was expected, what was seen, and a hint.** Proved by breaking
+two steps on purpose: renaming the securities panel's `data-testid` failed **step 20** reporting
+`route: true, panel: false` (the route rendered; the panel is gone), and hiding
+`app/data/politicians.json` failed **step 5** quoting the seed script's own message. Neither
+produced a generic non-zero exit, which is the property that matters here.
+
+**The vendor leg was stubbed, and this is the honest version of that sentence.** `.env` on this
+machine holds no AlphaVantage key, so no HTTP request left the machine on any recorded run. The stub
+sits at `BaseHTTPClient`'s `transport=` seam and **asserts the request it answers** — path,
+`function`, `symbol`, `interval`, `month` and the API key — so the client is proved to build the
+exact call `--live-vendor` would send. `--live-vendor` has **never been run**. The safety matrix is
+three cases and the middle one is the point: a key present *without* the flag **skips** the Celery
+ingest task rather than quietly spending a call. With no key at all it publishes anyway, because the
+client refuses before opening a socket and the message still proves broker → worker → task → client
+at zero cost — `FAILURE` with `ExternalServiceError` is the asserted outcome, read from the **raw**
+result-backend entry, because Celery reconstructs a stored exception by calling its class with the
+stored message and `ExternalServiceError(vendor, message, details=…)` does not accept that call.
+
+**Three findings while writing it, each a trap for the next person:**
+- **`asyncio.run` twice in one process kills asyncpg.** `app/db/engine.py` keeps a module-level
+  engine, so connections opened under the first loop outlive it. `in_a_loop` disposes inside the
+  loop — the same rule `app/jobs/base.py` already follows for a Celery task.
+- **`email-validator` refuses `.invalid`** (and `.localhost`, `.test`, `.local`, `.arpa`, `.onion`)
+  as special-use names. `@anvex.invalid` was a 422 eight steps in with a hint about the password
+  policy. `example.com` is IANA-reserved and is *not* on that list. A test now builds a real
+  `UserCreate` offline.
+- **A failure report is output.** The first `envelope()` dumped an unexpected 200 body into the
+  `observed:` line, and on this API that body is a `TokenPair` — a live access token, printed. It
+  now reports an unexpected object's **keys** and never its values.
+
+**The cold load runs the built bundle, not the dev server, and same-origin.** The bundle is
+evaluated into a jsdom window rather than fetched (`resources: 'usable'` would make jsdom load
+`/assets/index-*.js` from the document's origin, which is the API, which does not serve it), the
+build is done with an empty `VITE_API_BASE_URL` so the app's XHRs are same-origin and no CORS is
+involved, and CORS gets its own HTTP-level step instead. ANV-36's two jsdom facts both held: Node's
+`fetch`/`Response` have to be handed to the window or TanStack Router's `instanceof Response` kills
+every route load, and with no `ResizeObserver` the desktop renders **empty** — so the assertion is
+the securities panel and the route testid, never a window.
+
+**A third CI job, `Smoke`**, gated on *either* stack changing, using `docker compose` rather than
+`services:` because a service container starts before the first step and cannot express `up` →
+`migrate` → `seed`. Judged worth it because it is the only thing that proves the ticket's actual
+definition of done — a boot on a machine that has never seen the repository. Locally `--clean`
+destroys the volumes and never the images, so that half is a claim a developer's box cannot make. It
+never passes `--live-vendor` and a test asserts it.
+
+**14 mutations, all 14 caught.** A step row dropped from `docs/smoke.md`; a step id renamed in the
+driver only; the frontend flag removed from the last step; `--live-vendor` made the default; the
+access token printed in a step's detail line; `-T` dropped from `compose exec`; the password
+weakened to `password`; the email domain changed back to `.invalid`; a `SmokeFailure` raised without
+`expected`; the ingest task published despite a configured key; `--live-vendor` added to the CI job;
+`docs/smoke.md` dropped from the CI path filter; the vendor stub made to answer anything; and the
+`.sh` half of the pair gutted.
+
+**Also:** `backend/scripts/*.py` is scanned by `test_infra_terraform.py`'s "local development never
+depends on the infrastructure" test, so a smoke driver may not name the infrastructure tooling even
+in a docstring — the first draft did, in one word of prose, and the suite caught it.

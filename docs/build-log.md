@@ -5,11 +5,12 @@ is the handoff document, and it is kept short on purpose.
 
 | Read | For |
 | --- | --- |
-| this file | current status, environment traps, and the carry-overs still outstanding |
+| this file | current status, environment traps, and — the build being finished — the close-out at the end |
 | [`../CLAUDE.md`](../CLAUDE.md) | the architecture contract — what goes where, and why |
 | [`backlog.md`](./backlog.md) | the ticket specs, in execution order |
 | [`ticket-log.md`](./ticket-log.md) | the archive: what each completed ticket decided and found |
 | [`architecture.md`](./architecture.md) | the system, the two paths through it, the data model, and the **known limitations** |
+| [`smoke.md`](./smoke.md) | the twenty-step whole-stack check — and, at the end, what it does **not** prove |
 | [`adr/`](./adr/) | one record per decision, with the context and the costs as they actually were |
 | [`../backend/docs/`](../backend/docs/) | the runbook, the testing guide, and one endpoint through all seven layers |
 
@@ -105,11 +106,17 @@ modified. What each contributes to Anvex:
 | ANV-38 | CI pipeline | **Done** — *green on the first push* |
 | ANV-40 | AWS infrastructure skeleton | **Done** — *validated, never applied, $0.00* |
 | ANV-39 | Documentation and ADRs | **Done** — *architecture, runbook, walkthrough, 11 ADRs, all drift-tested* |
-| ANV-41 | E2E smoke | Next — *the last one* |
+| ANV-41 | E2E smoke | **Done** — *20 steps, green from a destroyed-volume clean slate.* **The backlog is complete.** |
 
-**4,801 tests total** — **3,879 backend** (3,565 once the DB/S3/broker tiers are deselected) and
-**922 frontend**, all in-container. 99% backend coverage; `ruff check`, `ruff format --check` and
-`eslint` all clean. Container tiers genuinely execute: **276 DB**, **29 S3**, **9 broker**.
+**4,917 tests total** — **3,995 backend** and **922 frontend**, all in-container. 99% backend
+coverage; `ruff check`, `ruff format --check` and `eslint` all clean. Container tiers genuinely
+execute: **276 DB**, **29 S3**, **9 broker**.
+
+**And one artefact that is not a test: `scripts/smoke`** (ANV-41). Twenty steps, the real
+containers, from `docker compose up` to loading `/research` in a DOM with nothing but a refresh
+token. It is the only thing here that proves the pieces fit together — read
+[`smoke.md`](./smoke.md) before quoting a green run, because it also says what the run does **not**
+prove.
 
 **The documentation is now drift-tested** (ANV-39). [`architecture.md`](./architecture.md) is the
 system diagram, the request path, the job path, the data model, the API surface and — read this
@@ -391,115 +398,113 @@ or anything else in `StorageService`; `S3Client` cannot talk to real AWS S3
 (`TODO(ANV-s3-aws)`); no TLS to Postgres or Redis; `/portfolio` is a documented non-feature; and
 the research desktop's arrangement does not survive a reload.
 
+---
 
-**For ANV-41 — from ANV-43:**
-- **ANV-41 (smoke):** any smoke script that registers an account needs a password satisfying the
-  policy. `"Correct-horse-battery1"` is the value the suites standardised on.
+# The build is finished
 
-**For ANV-41 — from ANV-36:**
-- **ANV-41 (smoke):** ANV-36's live-render technique is the right shape and is cheap — jsdom over
-  `dist/`, a fake `XMLHttpRequest`, assertions on `data-testid`. **Two non-obvious requirements:**
-  jsdom 25 defines neither `fetch` nor `Response`, and TanStack Router's redirect machinery does an
-  `instanceof Response`, so Node's globals must be handed to the window or **every route load dies**
-  with `ReferenceError: Response is not defined`; and jsdom has no `ResizeObserver`, so the desktop
-  renders **empty** — a smoke test should assert the securities panel and the route testid, not a
-  window. **Against a live API, the cold-load path is the single most valuable thing to smoke:**
-  seed a refresh token, load `/research`, assert the securities list arrives — that exercises the
-  guard, the interceptor, the rotation and the API in one go.
-- **Known follow-ups worth tickets:** desktop layout persistence (needs an API endpoint — there is
-  none), and a holdings model + quote source before `/portfolio` can be real.
+ANV-41 was the last ticket. Every entry in [`backlog.md`](./backlog.md) is **Done**, and the
+per-ticket record is in [`ticket-log.md`](./ticket-log.md). What follows replaces the
+carry-over section that used to live here: there is nothing left to carry over, so this is
+the close-out instead — what exists, what is proven, what is *not*, and what is worth a
+ticket next.
 
-**For ANV-41 — from ANV-37:**
-- **ANV-41 (smoke):** `scripts/smoke` should be a pair like everything else and will need a README
-  row. The boot sequence it documents already exists and is verified: `up core` → `migrate` →
-  `seed`, then `up frontend`. `reset-db --yes` is the clean-slate version of the same thing and
-  runs end to end in about 25 seconds.
-- **Where `fmt` stops:** it is backend-only, because the frontend has no formatter — eslint is a
-  linter and prettier is not installed. Adding prettier is a repo-wide diff and wants its own
-  ticket; until then `lint frontend` is the whole frontend story, and the `fmt` header says so.
+## What was built
 
-**For ANV-41 — from ANV-38:**
-- **CI exists and is green, so every later ticket has a verifier.**
-  [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs `Backend` and `Frontend` on every
-  push to `main` and every pull request; `backend/tests/unit/test_ci_workflow.py` (64 tests) is what
-  guards it. **A push that only touches `docs/build-log.md` or `docs/ticket-log.md` runs neither
-  job** — that is the path filter working, not CI being broken. `docs/aws-deployment.md`,
-  `docs/architecture.md` and `docs/adr/**` *do* run the backend job, because tests read them.
-- **Adding a test that reads outside `backend/` means adding its path to the backend filter.**
-  `test_ci_workflow.py` discovers those paths by scanning the test sources for `REPO_ROOT / …` and
-  fails if one is not covered, so it will tell you — but it fails *after* you write the test, not
-  before. Currently covered: `scripts/**`, `SignUpPage.jsx`, `frontend/package.json`, `README.md`,
-  `CLAUDE.md`, `.env.example`, `docker-compose.yml`, `.gitignore` (ANV-40),
-  `docs/aws-deployment.md` (ANV-40), and `docs/architecture.md` + `docs/adr/**` (ANV-39) — the only
-  three `docs/` entries. `docs/build-log.md` and `docs/ticket-log.md` are still in neither filter.
-- **ANV-41 (smoke):** a smoke job is a **third job in this workflow**, not a fourth top-level file,
-  and it needs the boot sequence a service container cannot express (`up core` → `migrate` → `seed`)
-  — so it wants `docker compose` on the runner rather than `services:`. If it adds `scripts/smoke`
-  as a pair, remember the README table row, and remember that `test_ci_workflow.py` asserts every
-  `./scripts/*.sh` the workflow names actually exists.
-- **The S3 tier does not run in CI** — 14 tests skip. GitHub service containers can override an
-  entrypoint but cannot pass arguments, and `minio/minio` needs `server /data`. An image with a
-  default command, or a `docker run` step in a smoke job, are the two ways back; both are decisions
-  rather than fixes.
-- **`gh` is installed but unauthenticated**, so a session cannot watch a run through it. The repo is
-  **public**, so `https://api.github.com/repos/sweiler6420/Anvex/actions/runs` and
-  `…/actions/runs/<id>/jobs` answer unauthenticated and give per-step conclusions — enough to verify
-  a run end to end. **Log bodies are 403 without a token**, so exact test counts have to come from
-  the local run. 60 requests/hour: poll every 25 s, not every 2 s.
-- **`actionlint` validates the workflow locally with no Docker**: the Windows binary from the
-  `rhysd/actionlint` GitHub release runs standalone. `docker pull` failed on this machine with a DNS
-  error for `production.cloudfront.docker.com`, which may recur.
+A monorepo replacing three read-only repositories (`AverageInvestorApi`,
+`AverageInvestorService`, `AverageInvestorWeb`):
 
+- **An async FastAPI backend** in seven layers — `models → repos → domain → schemas →
+  services → deps → api` — with Alembic migrations, a `users`/`stocks`/`stock_data`/
+  `watchlists`/`watchlist_data`/`politicians` schema, JWT auth with a real password policy,
+  a paginated API behind one error envelope, and structured logging with request ids.
+- **Celery jobs** carrying the whole of the old ETL repository: a fan-out that plans a run
+  and paces it with message countdowns rather than `sleep`, a per-symbol task that makes
+  exactly one vendor call, and a heartbeat.
+- **A client layer** for AlphaVantage and NewsAPI over one retrying, redacting, typed HTTP
+  base, plus an S3 client and a storage service.
+- **A Vite + React frontend** with TanStack Router, guarded routes, an axios interceptor
+  that refreshes single-flight on 401, a dark-mode shell with no flash of white, the ported
+  marketing pages, and a bin-packing window desktop with real geometry behind it.
+- **Docker Compose** for the lot, **eleven `scripts/` pairs**, **CI** with three jobs,
+  **an unapplied Terraform skeleton**, and **documentation with 337 drift tests holding it
+  to the code**.
 
-**For ANV-41 — from ANV-40:**
-- **`backend/infra/` exists, is `validate`-clean, and has never been applied.** No AWS account has
-  been touched and the running cost is $0.00. **Nothing in either remaining ticket should change
-  that**: no `scripts/` pair, no CI job, no `terraform apply` / `destroy` / `plan` / `import`
-  anywhere — a plan reaches a real account, so a workflow that can run one holds a credential that
-  could do more. `test_infra_terraform.py` fails on any of those appearing in a script or workflow.
-- **The verification loop needs no AWS account** and takes about a minute:
-  `cd backend/infra && terraform init -backend=false && terraform validate && terraform fmt -check
-  -recursive`. **Terraform is not installed on this machine and must not be installed** — unzip a
-  release from `releases.hashicorp.com` into a scratch dir and run it by full path. The provider
-  registry's DNS is flaky here in the same way Docker's is; **retry, it works on the second try**.
-- **The four ADR-shaped decisions ANV-40 left in prose now have records** (ANV-39): ADR-0009 (no
-  secret value in Terraform; secrets created empty), ADR-0010 (committed `.tfvars`, and `local` is
-  not a deployment) and ADR-0011 (one image and one ECR repository for three services). The two
-  **application** gaps it found are in [`architecture.md`](./architecture.md) §6: `S3Client` cannot
-  talk to real S3, and nothing uses TLS to Postgres or Redis. Both are small application changes
-  and each wants its own ticket.
-- **ANV-41 (smoke):** nothing in the smoke path goes near AWS. `POSTGRES_HOST` in the environment is
-  still the one supported way to point host-side tooling somewhere else (ANV-37), and that is the
-  *only* seam the infrastructure adds — there is no second DSN and no AWS-specific code path in
-  `app/`. If a smoke script ever grows an "against a deployed environment" mode, it must take a base
-  URL as an argument rather than reading anything out of `backend/infra/`, or it breaks the
-  "local development never depends on this" test.
-- **If you add a `Settings` field, you must edit `backend/infra/modules/compute/locals.tf`.** The
-  union of `container_environment` and `container_secrets` there is asserted **equal** to
-  `Settings.model_fields` upper-cased, in both directions. The suite will tell you, but only after
-  you have added the field.
-- **`python-hcl2` is now a backend dev dependency**, for the one test module that parses HCL — the
-  same argument that brought in `pyyaml` for `test_ci_workflow.py`.
+## What is proven end to end
 
+`scripts/smoke` — [`smoke.md`](./smoke.md) — twenty steps against the real containers, green
+from a **destroyed-volume clean slate** in 27 seconds and against a warm stack in 12:
 
-**For ANV-41 — from ANV-39 (the last carry-over):**
-- **The docs are drift-tested, so ANV-41 has obligations.** If a smoke script or job **adds a
-  route**, `docs/architecture.md`'s API surface table needs the row — `test_docs.py` compares it
-  against the live OpenAPI document in both directions and will fail the backend suite. If it adds a
-  `TODO(ANV-…)` marker under `app/` or `infra/`, the known-limitations table needs the row, same
-  deal. If it adds a `scripts/smoke` pair, that is a README table row (ANV-37) **and** a check that
-  `test_ci_workflow.py` can see the `.sh` half.
-- **`docs/architecture.md` and `docs/adr/**` are now in the CI backend path filter**, so editing
-  either runs the backend job. `docs/build-log.md` and `docs/ticket-log.md` still run nothing —
-  logging a ticket is free.
-- **`backend/docs/runbook.md` already documents the boot sequence ANV-41 needs** (`up core` →
-  `migrate` → `seed`, then `up frontend`; `reset-db --yes` for the clean slate) and every trap that
-  can break it, in a "when it will not come up" table. Extend that table rather than writing a
-  second one, and if the smoke path finds a new trap, it belongs there.
-- **The known-limitations table is where a smoke test's expectations come from.** `/portfolio`
-  fetches nothing at all, `/research` fetches `GET /v1/stocks` on mount, and the desktop renders
-  **empty** under jsdom because there is no `ResizeObserver` — so assert the securities panel and
-  the route `data-testid`, never a window.
-- **The backend `pytest` summary line does not survive this shell.** A full run prints its progress
-  and then nothing; `$LASTEXITCODE` is the reliable signal, and counts come from
-  `--collect-only -q` summed per file. Do not read "no summary" as "the run died".
+> `docker compose up` → `alembic upgrade head` → seed → API liveness and readiness → a CORS
+> preflight → register → log in → exchange a token pair → read the seeded roster → a
+> security → ingest one symbol-month → broker → worker → result backend → publish the real
+> ingest task and watch it reach a terminal state → read the candles back over HTTP →
+> create a watchlist and add to it → build the production bundle → **load `/research` in a
+> DOM with nothing but a refresh token and watch the securities list arrive**.
+
+That last step is the valuable one: it exercises the route guard, the interceptor, the 401,
+the rotation, the bearer replay and the API in a single page load.
+
+## What is explicitly NOT proven
+
+Stated here as well as in [`smoke.md`](./smoke.md), because a green whole-stack run is the
+easiest artefact in a repository to over-read.
+
+- **The vendor leg was stubbed, not live.** `.env` on the build machine holds no
+  AlphaVantage key, so every recorded run stubbed the vendor at the client-base transport
+  seam — the stub asserts the exact request the live path would send, but no HTTP request
+  ever left the machine. `--live-vendor` spends one real call and has **never been run**.
+- **The ingest *task* proved the seam, not the fetch.** With no key the client refuses
+  before opening a socket, so the Celery message proves broker → worker → task → client and
+  stops there, with `not_configured` as the asserted outcome.
+- **No AWS, ever.** `backend/infra/` has never been applied, no account has been touched,
+  and the running cost is still $0.00.
+- **No S3 in the smoke path.** MinIO starts because `api` depends on it; nothing uploads.
+- **No mail, no `/portfolio` fetch, no real browser.** The cold load is jsdom, which has no
+  layout — the research desktop renders **empty** there, which is why the assertion is on
+  the securities panel and not on a window.
+- **The images were cached locally.** `--clean` destroys the volumes, not `anvex/api:dev`.
+  Only the CI smoke job builds from nothing, and that is the half a developer's machine can
+  never claim.
+- **The S3 test tier still skips in CI** — 14 tests, for the `minio/minio` entrypoint reason
+  in [`architecture.md`](./architecture.md) §6.
+
+## What ANV-41 found
+
+Two contract failures, one root cause, and neither stops the stack coming up — which is
+exactly why nothing before a whole-stack run had noticed. **A refresh token carries no
+`jti`**, so:
+
+1. **a spent refresh token is never revoked** — `POST /v1/auth/refresh` mints a new pair and
+   the old one keeps working for its full lifetime. `architecture.md`'s API surface table
+   claimed it "invalidates the token presented"; it does not, and the table is corrected;
+2. **the "new" token is not necessarily a different string** — the payload is
+   `{sub, type, iat, exp}` at one-second resolution, so a rotation inside the same second as
+   the mint before it is byte-identical. The smoke's first assertion of inequality failed
+   intermittently, which is how it was found.
+
+Every test in the repository mocked one side or the other of that exchange, so both were
+invisible. `TODO(ANV-refresh-revocation)` now marks the place and §6 carries the row.
+
+## Open follow-ups, in the order they are worth doing
+
+| Ticket | What | Why it is not done |
+| --- | --- | --- |
+| **ANV-48** | **Refresh-token `jti` and a revocation store.** Found by ANV-41, above. | Needs a `jti` claim and somewhere to keep spent ids — a Redis set expiring with the token. That is a second store in the auth request path, i.e. a decision, not a line of code |
+| **ANV-44** | `S3Client` cannot talk to real AWS S3. | `Settings.s3_endpoint_url` defaults to MinIO's URL so it cannot be unset, `""` is not `None` to botocore, and `_require_configuration` refuses a blank key pair on purpose. A small application change, after which the Terraform's IAM user and its secret are deleted |
+| **ANV-45** | No TLS to Postgres or Redis. | `Settings` builds a plain `postgresql+asyncpg://` and a plain `redis://`, so turning on `rds.force_ssl` or `transit_encryption_enabled` alone would refuse every connection. Both halves have to move together |
+| **ANV-46** | The research desktop's arrangement does not survive a reload. | Not one line: `localStorage` is per-browser and per-device, and **there is no API endpoint for a user's layout**. Where it lives has to be decided first |
+| **ANV-47** | No mail client. | `POST /v1/auth/recovery` logs `delivered=False` and returns 202 behind `TODO(ANV-mail)`. Needs an SMTP or SES client in `app/clients/` and a signed, single-use reset link |
+
+Two more, smaller: **prettier for the frontend** (`scripts/fmt` is backend-only because
+eslint is a linter and no formatter is installed — it is a repo-wide diff and wants its own
+ticket), and **a holdings model plus a quote source** before `/portfolio` can stop being a
+documented non-feature.
+
+## If you are picking this up cold
+
+Read [`../CLAUDE.md`](../CLAUDE.md) §3 for the layering contract,
+[`architecture.md`](./architecture.md) for the system and — before filing anything — its §6
+known limitations, and [`../backend/docs/runbook.md`](../backend/docs/runbook.md) for how to
+start it and what stops it starting. Then run `scripts/smoke`. If it is green, the stack is
+fine and the problem is somewhere the twenty steps do not reach; the list of those is in
+[`smoke.md`](./smoke.md).
