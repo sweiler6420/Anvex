@@ -80,7 +80,7 @@ the stack coming up, and every hint above points into it.
 | 16 | `stock-data` | The candles read back over HTTP: prices are **quoted JSON strings**, `datetime` is **naive** | A JSON number silently loses the fourth decimal place; an offset on `datetime` means the exchange clock grew a zone |
 | 17 | `watchlist` | A watchlist is created, the security is added, and the entries come back in `position` order | An empty list means the add landed on a different watchlist or a different account |
 | 18 | `frontend-up` | The Vite dev server container starts and answers on its published port | `scripts/logs web`; a Vite that will not start is nearly always a config syntax error |
-| 19 | `frontend-build` | `npm run build` produces a **production** bundle — zero `jsxDEV` calls | Something set `NODE_ENV=development`; Vite honours an inherited one over its own mode, silently |
+| 19 | `frontend-build` | `npm run build` produces a **production** bundle — zero `jsxDEV` calls — into a container-local `/tmp`, never back through the bind mount | Something set `NODE_ENV=development`; Vite honours an inherited one over its own mode, silently. An `EACCES` means someone pointed the build's output directory back at `/app` |
 | 20 | `cold-load` | `/research` loads in jsdom from a **refresh token alone**, and the securities panel lists the ingested symbol | This is the guard, the interceptor, the rotation, the bearer replay and the API in one page load |
 
 `--skip-frontend` drops the last three. Nothing else is optional: a smoke test with a menu

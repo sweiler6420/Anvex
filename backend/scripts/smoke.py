@@ -178,6 +178,16 @@ HEALTHY_SERVICES: Final[tuple[str, ...]] = ("db", "redis", "minio")
 #: `package.json`'s `"type": "module"` and reads it as CommonJS — which is what `jsdom` is.
 COLD_LOAD_PATH: Final[str] = "/tmp/anvex-smoke-cold-load.cjs"
 
+#: Where the smoke's bundle is built. **Container-local, and that is not a preference.**
+#: `web` runs as uid 1000 and compose bind-mounts the host's `frontend/` over `/app`. On
+#: Windows that mount ignores ownership; on Linux — a CI runner, where the checkout belongs
+#: to uid 1001 — creating `/app/dist` is `EACCES`, and ANV-41's first CI run got to step 19
+#: of 20 and died exactly there. Building into `/tmp` also means a smoke run never clobbers
+#: the `dist/` a developer is looking at. Same argument as `cacheDir: /tmp/anvex-vite` in
+#: `vite.config.js` and `beat --schedule /tmp/…` in `docker-compose.yml`: **nothing is
+#: written back through the bind mount.**
+SMOKE_DIST: Final[str] = "/tmp/anvex-smoke-dist"
+
 
 # ---------------------------------------------------------------------------------------
 # Failure reporting
@@ -1350,12 +1360,17 @@ def step_frontend_build(context: Context) -> str:
     same-origin and no CORS is involved. That keeps the harness honest — a jsdom
     cross-origin XHR failing would be a fact about jsdom, and the CORS configuration already
     has a step of its own above.
+
+    The output goes to :data:`SMOKE_DIST`, container-local, for the ownership reason
+    recorded there. ``--emptyOutDir`` is required rather than tidy: vite refuses to clear an
+    ``outDir`` outside the project root unless it is told to, so without it a second run
+    would build on top of the first.
     """
     done = compose_exec(
         "web",
         "sh",
         "-c",
-        "VITE_API_BASE_URL= npm run build",
+        f"VITE_API_BASE_URL= npm run build -- --outDir {SMOKE_DIST} --emptyOutDir",
         timeout=FRONTEND_BUILD_TIMEOUT,
     )
     if done.code != 0:
@@ -1366,7 +1381,11 @@ def step_frontend_build(context: Context) -> str:
             "is a frontend failure, not a stack one",
         )
     development = compose_exec(
-        "web", "sh", "-c", "cat dist/assets/*.js | grep -c jsxDEV || true", timeout=60.0
+        "web",
+        "sh",
+        "-c",
+        f"cat {SMOKE_DIST}/assets/*.js | grep -c jsxDEV || true",
+        timeout=60.0,
     )
     count = development.stdout.strip().splitlines()[-1] if development.stdout.strip() else "0"
     if count != "0":
@@ -1376,7 +1395,7 @@ def step_frontend_build(context: Context) -> str:
             hint="something set NODE_ENV=development; Vite honours an inherited NODE_ENV "
             "over its own mode and ships a development build with no warning",
         )
-    return "production bundle built with an empty VITE_API_BASE_URL (same-origin)"
+    return f"production bundle built into {SMOKE_DIST}, VITE_API_BASE_URL empty (same-origin)"
 
 
 def step_cold_load(context: Context) -> str:
@@ -1395,7 +1414,7 @@ def step_cold_load(context: Context) -> str:
         timeout=COLD_LOAD_TIMEOUT + 60.0,
         stdin=COLD_LOAD_SOURCE,
         env={
-            "ANVEX_SMOKE_DIST": "/app/dist",
+            "ANVEX_SMOKE_DIST": SMOKE_DIST,
             "ANVEX_SMOKE_ORIGIN": "http://api:8000",
             "ANVEX_SMOKE_ROUTE": "/research",
             "ANVEX_SMOKE_TICKER": SYMBOL,

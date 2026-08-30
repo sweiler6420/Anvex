@@ -467,6 +467,20 @@ class TestTheMachineSpecificRules:
         assert argv[:2] == ["docker", "compose"]
         assert argv[argv.index("exec") + 1] == "-T"
 
+    def test_nothing_is_written_back_through_the_bind_mount(self) -> None:
+        """The `web` container is uid 1000; a Linux checkout is not, so `/app` is read-only.
+
+        Found by CI, not by the developer's machine: Windows bind mounts ignore ownership,
+        so building into `/app/dist` worked locally and was `EACCES` on the runner at step 19
+        of 20. Everything the smoke writes inside a container goes to `/tmp`, which is the
+        same rule `vite.config.js`'s `cacheDir` and compose's `beat --schedule` already
+        follow.
+        """
+        assert smoke.SMOKE_DIST.startswith("/tmp/")
+        assert smoke.COLD_LOAD_PATH.startswith("/tmp/")
+        for command in _container_commands():
+            assert "/app/dist" not in command, f"the smoke writes into the bind mount: {command}"
+
     def test_the_registration_body_is_one_the_schema_accepts(self) -> None:
         """Offline, against the real `UserCreate` — the whole body, not just the password.
 
@@ -553,6 +567,18 @@ def _error_codes() -> set[str]:
                 code = getattr(value, "code", None)
                 if isinstance(code, str) and code:
                     found.add(code)
+    return found
+
+
+def _container_commands() -> list[str]:
+    """Every string literal the driver hands to a container, f-strings included."""
+    text = source()
+    found: list[str] = []
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            found.append(node.value)
+        elif isinstance(node, ast.JoinedStr):
+            found.append(ast.get_source_segment(text, node) or "")
     return found
 
 

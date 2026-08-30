@@ -369,12 +369,17 @@ jobs:
       # repository is public and `gh` is not always authenticated, so without this step
       # "the smoke job is red" is the whole of what anyone can learn from outside — and the
       # entire design of `scripts/smoke` is that a failure names the step, what it expected
-      # and what it saw. Re-emitting the tail as workflow errors puts that diagnosis on the
-      # run summary and into the checks API, where it can be read with no credentials.
+      # and what it saw. Re-emitting that block as workflow errors puts the diagnosis on the
+      # run summary and into the checks API, which answers with no credentials.
+      #
+      # From `FAILED at step` rather than `tail`, and capped at ten lines, because GitHub
+      # keeps only about ten annotations per step: a blind tail spends them on whatever
+      # happened to be last, which on the first attempt was the *beginning* of the failing
+      # command's output and not the diagnosis.
       - name: Report which step failed
         if: failure()
         shell: bash
-        run: tail -n 25 smoke.log | sed 's/^/::error::/'
+        run: sed -n '/^FAILED at step/,$p' smoke.log | head -n 10 | sed 's/^/::error::/'
 
       # And what the containers were doing while it happened, which the step's own message
       # cannot know.
